@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1">
+<title>SolarNest</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SolarNest">
+<meta name="theme-color" content="#0D0A22">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='13' fill='%23FFB833'/%3E%3Cg stroke='%23FFB833' stroke-width='5' stroke-linecap='round'%3E%3Cline x1='32' y1='5' x2='32' y2='13'/%3E%3Cline x1='32' y1='51' x2='32' y2='59'/%3E%3Cline x1='5' y1='32' x2='13' y2='32'/%3E%3Cline x1='51' y1='32' x2='59' y2='32'/%3E%3C/g%3E%3C/svg%3E">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --txt:#fff; --muted:rgba(255,255,255,.62); --muted2:rgba(255,255,255,.42);
+    --glass:rgba(255,255,255,.06);
+    --stroke:rgba(255,255,255,.12); --stroke2:rgba(255,255,255,.18);
+    --prod1:#FF9F0A; --prod2:#FFD60A;
+    --cons1:#0A84FF; --cons2:#40D6FF;
+    --exp1:#30D158; --exp2:#7CFFA8;
+    --imp1:#FF6B6B; --imp2:#FF9E7A;
+    --gold1:#FFE56B; --gold2:#FFB833;
+    --pun:#FF453A; --lla:#FFD60A; --val:#34C759;
+    --radius:20px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;
+    color:var(--txt); position:relative; min-height:100vh; overflow-x:hidden;
+    background:linear-gradient(150deg,#100A26 0%,#1A0D40 35%,#0D1433 70%,#150A2E 100%);
+    background-attachment:fixed; -webkit-font-smoothing:antialiased;
+  }
+  .blob{position:fixed;border-radius:50%;filter:blur(80px);z-index:0;pointer-events:none}
+  .b1{width:300px;height:300px;background:rgba(168,85,247,.16);top:-120px;left:-90px}
+  .b2{width:260px;height:260px;background:rgba(10,132,255,.14);top:40%;right:-100px}
+  .b3{width:340px;height:340px;background:rgba(99,102,241,.12);bottom:-40px;left:-60px}
+  .num{font-family:ui-rounded,"SF Pro Rounded",-apple-system,system-ui,sans-serif;font-weight:800}
+
+  .app{position:relative;z-index:1;max-width:520px;margin:0 auto;
+    padding:calc(env(safe-area-inset-top) + 8px) 16px calc(96px + env(safe-area-inset-bottom))}
+
+  .top{display:flex;align-items:center;justify-content:space-between;padding:8px 2px 16px}
+  .top .brand{display:flex;align-items:center;gap:9px}
+  .top .logo{width:30px;height:30px;filter:drop-shadow(0 2px 8px rgba(255,184,51,.5))}
+  .top h1{font-size:20px;font-weight:700;letter-spacing:-.02em}
+  .demo{font-size:10.5px;font-weight:700;color:var(--gold2);background:rgba(255,184,51,.14);
+    border:1px solid rgba(255,184,51,.3);padding:5px 10px;border-radius:999px;letter-spacing:.03em}
+
+  .page{display:none;animation:fade .4s ease}
+  .page.on{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+  .glass{background:var(--glass);backdrop-filter:blur(22px) saturate(150%);-webkit-backdrop-filter:blur(22px) saturate(150%);
+    border:1px solid var(--stroke);border-radius:var(--radius);
+    box-shadow:0 8px 30px -12px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.08)}
+
+  .seg{display:flex;background:rgba(0,0,0,.28);border:1px solid var(--stroke);border-radius:13px;padding:4px;gap:3px}
+  .seg button{flex:1;border:none;background:transparent;color:var(--muted);font-family:inherit;
+    font-size:14px;font-weight:600;padding:9px 6px;border-radius:9px;cursor:pointer;transition:.2s}
+  .seg button.on{background:rgba(255,255,255,.14);color:#fff;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+
+  .pnav{display:flex;align-items:center;gap:10px;margin:14px 0}
+  .pnav .lbl{flex:1;text-align:center}
+  .pnav .lbl b{display:block;font-size:17px;font-weight:700;text-transform:capitalize}
+  .pnav .lbl span{font-size:12px;color:var(--muted)}
+  .rnd{width:38px;height:38px;flex:none;border-radius:11px;border:1px solid var(--stroke);
+    background:var(--glass);color:#fff;display:grid;place-items:center;cursor:pointer;transition:.15s}
+  .rnd:active{transform:scale(.9)}.rnd:disabled{opacity:.28}
+  .rnd svg{width:17px;height:17px}
+
+  .hero{padding:22px;margin-bottom:14px;position:relative;overflow:hidden}
+  .hero .lab{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;
+    text-transform:uppercase;letter-spacing:.06em;color:var(--prod2)}
+  .hero .big{font-size:52px;line-height:1.04;margin:8px 0 0;letter-spacing:-.02em;
+    background:linear-gradient(180deg,var(--gold1),var(--gold2));-webkit-background-clip:text;background-clip:text;color:transparent;
+    text-shadow:0 2px 14px rgba(255,184,51,.25)}
+  .hero .big small{font-size:21px;color:var(--muted);-webkit-text-fill-color:var(--muted);margin-left:5px}
+  .hero .sub{font-size:14px;color:rgba(255,255,255,.82);margin-top:10px;line-height:1.45}
+  .hero .sub b{color:var(--prod2)}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:14px}
+  .stat{padding:15px 15px 14px}
+  .stat .ic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;margin-bottom:9px}
+  .stat .ic svg{width:17px;height:17px;color:#fff}
+  .stat .t{font-size:12.5px;color:var(--muted);font-weight:600}
+  .stat .v{font-size:25px;margin-top:3px;letter-spacing:-.01em}
+  .stat .v small{font-size:13px;color:var(--muted);font-weight:600;margin-left:2px}
+
+  .card{padding:17px 16px}
+  .card+.card{margin-top:13px}
+  .ch{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .ch h2{font-size:16px;font-weight:700}
+  .ch .small{font-size:12px;color:var(--muted)}
+
+  .chart-box{position:relative;height:228px;margin-top:8px}
+
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 6px}
+  .chip{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--muted);
+    background:rgba(255,255,255,.05);border:1px solid var(--stroke);padding:8px 12px;border-radius:11px;cursor:pointer;transition:.18s}
+  .chip .d{width:10px;height:10px;border-radius:50%;opacity:.4;transition:.18s}
+  .chip.on{color:#fff;background:rgba(255,255,255,.12);border-color:var(--stroke2)}
+  .chip.on .d{opacity:1}
+
+  .meter{margin-top:14px}.meter:first-of-type{margin-top:6px}
+  .meter .r{display:flex;justify-content:space-between;font-size:13.5px;margin-bottom:7px}
+  .meter .r .p{font-weight:700}
+  .track{height:9px;background:rgba(255,255,255,.1);border-radius:999px;overflow:hidden}
+  .fill{height:100%;border-radius:999px;width:0;transition:width .9s cubic-bezier(.2,.7,.2,1)}
+
+  .bill .total{text-align:center;padding:8px 0 4px}
+  .bill .total .k{font-size:13px;color:var(--muted);font-weight:600}
+  .bill .total .v{font-size:46px;line-height:1.1;margin-top:2px;
+    background:linear-gradient(180deg,var(--gold1),var(--gold2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .bill .total .est{font-size:12.5px;color:var(--muted);margin-top:6px}
+  .live{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--exp2);
+    background:rgba(48,209,88,.12);border:1px solid rgba(48,209,88,.3);padding:4px 9px;border-radius:999px}
+  .live .pulse{width:7px;height:7px;border-radius:50%;background:var(--exp1);animation:pulse 1.8s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .line{display:flex;justify-content:space-between;align-items:baseline;padding:11px 0;border-bottom:1px solid rgba(255,255,255,.07);font-size:14.5px}
+  .line:last-child{border-bottom:none}
+  .line .lk{color:rgba(255,255,255,.85)}.line .lk small{color:var(--muted);font-size:12px;display:block;margin-top:2px}
+  .line .lv{font-weight:700;font-variant-numeric:tabular-nums}
+  .line.neg .lv{color:var(--exp2)}
+  .line.tot{border-top:1px solid var(--stroke);margin-top:4px;padding-top:14px;font-size:16px}
+  .line.tot .lv{font-size:18px}
+
+  .fld{margin-bottom:15px;min-width:0}
+  .two>*,.three>*{min-width:0}
+  .fld>label{display:block;font-size:13px;font-weight:600;color:var(--muted);margin-bottom:7px}
+  .inp{display:flex;align-items:center;background:rgba(0,0,0,.28);border:1px solid var(--stroke);border-radius:12px;padding:0 13px;transition:.18s}
+  .inp:focus-within{border-color:var(--stroke2);background:rgba(0,0,0,.36)}
+  .inp input{flex:1;background:none;border:none;outline:none;color:#fff;font-family:inherit;font-size:16px;font-weight:600;padding:12px 0;min-width:0}
+  .inp .u{font-size:13px;color:var(--muted);font-weight:600;padding-left:8px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+  .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px}
+  .plab{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;margin-bottom:7px}
+  .plab .d{width:11px;height:11px;border-radius:3px}
+  .prow{display:grid;grid-template-columns:90px 1fr;align-items:center;gap:12px;margin-top:10px}
+  .prow .plab{margin-bottom:0}
+
+  .bands{display:grid;grid-template-columns:repeat(12,1fr);gap:4px;margin-top:4px}
+  .hr{aspect-ratio:1;border-radius:7px;display:grid;place-items:center;font-size:10px;font-weight:700;
+    color:rgba(0,0,0,.62);cursor:pointer;user-select:none;transition:.12s;border:1px solid rgba(0,0,0,.15)}
+  .hr:active{transform:scale(.88)}
+  .hint{font-size:11.5px;color:var(--muted);margin-top:9px;line-height:1.45}
+
+  .note{font-size:11.5px;color:var(--muted);line-height:1.5;margin-top:6px}
+  .note b{color:var(--gold2)}
+  .save{width:100%;border:none;border-radius:14px;padding:15px;margin-top:6px;font-family:inherit;
+    font-size:15px;font-weight:700;color:#11131A;cursor:pointer;
+    background:linear-gradient(135deg,var(--gold1),var(--gold2));box-shadow:0 8px 22px -8px rgba(255,184,51,.6)}
+  .save:active{transform:scale(.99)}
+  .saved{text-align:center;font-size:13px;color:var(--exp2);font-weight:600;margin-top:10px;height:16px;opacity:0;transition:.3s}
+  .saved.on{opacity:1}
+
+  .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:20;
+    padding:8px 14px calc(8px + env(safe-area-inset-bottom));
+    background:linear-gradient(180deg,rgba(13,10,34,0),rgba(13,10,34,.85) 45%)}
+  .tabbar .inner{max-width:520px;margin:0 auto;display:flex;
+    background:rgba(20,16,46,.7);backdrop-filter:blur(26px) saturate(160%);-webkit-backdrop-filter:blur(26px) saturate(160%);
+    border:1px solid var(--stroke);border-radius:20px;padding:7px;box-shadow:0 10px 30px -8px rgba(0,0,0,.6)}
+  .tabbar button{flex:1;border:none;background:none;color:var(--muted2);font-family:inherit;
+    display:flex;flex-direction:column;align-items:center;gap:3px;padding:7px 2px;border-radius:13px;cursor:pointer;transition:.2s}
+  .tabbar button svg{width:21px;height:21px}
+  .tabbar button span{font-size:10.5px;font-weight:600}
+  .tabbar button.on{color:#fff;background:rgba(255,255,255,.1)}
+  .tabbar button.on svg{filter:drop-shadow(0 2px 6px rgba(255,184,51,.4))}
+
+  .rise{opacity:1;transform:none}
+  @keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion: no-preference){
+    .rise{opacity:0;transform:translateY(12px);animation:rise .55s cubic-bezier(.2,.7,.2,1) forwards}
+  }
+  .d1{animation-delay:.04s}.d2{animation-delay:.1s}.d3{animation-delay:.16s}.d4{animation-delay:.22s}.d5{animation-delay:.28s}
+</style>
+</head>
+<body>
+<div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+
+<div class="app">
+  <div class="top">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 64 64"><circle cx="32" cy="32" r="12" fill="#FFB833"/><g stroke="#FFB833" stroke-width="5" stroke-linecap="round"><line x1="32" y1="6" x2="32" y2="14"/><line x1="32" y1="50" x2="32" y2="58"/><line x1="6" y1="32" x2="14" y2="32"/><line x1="50" y1="32" x2="58" y2="32"/><line x1="13" y1="13" x2="19" y2="19"/><line x1="45" y1="45" x2="51" y2="51"/><line x1="51" y1="13" x2="45" y2="19"/><line x1="19" y1="45" x2="13" y2="51"/></g></svg>
+      <h1>SolarNest</h1>
+    </div>
+    <div class="demo">DEMO · datos simulados</div>
+  </div>
+
+  <!-- INICIO -->
+  <div class="page on" id="pInicio">
+    <div class="seg rise d1" style="margin-bottom:2px">
+      <button class="on" data-mode="day" onclick="setMode('day')">Día</button>
+      <button data-mode="month" onclick="setMode('month')">Mes</button>
+    </div>
+    <div class="pnav rise d1">
+      <button class="rnd" id="iPrev" onclick="nav(-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+      <div class="lbl"><b id="iMain">—</b><span id="iSub">—</span></div>
+      <button class="rnd" id="iNext" onclick="nav(1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+    </div>
+
+    <div class="glass hero rise d2">
+      <div class="lab">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="#FFD60A"><circle cx="12" cy="12" r="5"/><g stroke="#FFD60A" stroke-width="2" stroke-linecap="round"><line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/><line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></g></svg>
+        Producción solar
+      </div>
+      <div class="big num"><span id="iHero">0</span><small>kWh</small></div>
+      <div class="sub" id="iSum">—</div>
+    </div>
+
+    <div class="grid rise d3">
+      <div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--cons1),var(--cons2))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 13h2l2-7 4 14 3-9 2 5h5"/></svg></div><div class="t">Consumo</div><div class="v num"><span id="iCons">0</span><small>kWh</small></div></div>
+      <div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--exp1),var(--exp2))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></div><div class="t">Vertido a red</div><div class="v num"><span id="iExp">0</span><small>kWh</small></div></div>
+      <div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--imp1),var(--imp2))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg></div><div class="t">Comprado a red</div><div class="v num"><span id="iImp">0</span><small>kWh</small></div></div>
+      <div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--gold1),var(--gold2))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0M12 7v5l3 2"/></svg></div><div class="t">Coste estimado</div><div class="v num">€<span id="iCost">0</span></div></div>
+    </div>
+
+    <div class="glass card rise d4">
+      <div class="ch"><h2>Comparativa</h2><span class="small">producción · consumo · vertido</span></div>
+      <div class="chart-box"><canvas id="cInicio"></canvas></div>
+    </div>
+
+    <div class="glass card rise d5">
+      <h2 style="font-size:16px;font-weight:700">Aprovechamiento</h2>
+      <div class="meter"><div class="r"><b>Autosuficiencia</b><span class="p num" id="iSS">0%</span></div><div class="track"><div class="fill" id="fSS" style="background:linear-gradient(90deg,var(--prod1),var(--prod2))"></div></div></div>
+      <div class="meter"><div class="r"><b>Autoconsumo solar</b><span class="p num" id="iSC">0%</span></div><div class="track"><div class="fill" id="fSC" style="background:linear-gradient(90deg,var(--exp1),var(--exp2))"></div></div></div>
+    </div>
+  </div>
+
+  <!-- INFORMES -->
+  <div class="page" id="pInformes">
+    <div class="seg rise d1" style="margin-bottom:2px">
+      <button class="on" data-mode="day" onclick="setMode('day')">Día</button>
+      <button data-mode="month" onclick="setMode('month')">Mes</button>
+    </div>
+    <div class="pnav rise d1">
+      <button class="rnd" id="rPrev" onclick="nav(-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+      <div class="lbl"><b id="rMain">—</b><span id="rSub">—</span></div>
+      <button class="rnd" id="rNext" onclick="nav(1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+    </div>
+
+    <div class="glass card rise d2">
+      <div class="ch"><h2>Gráficas</h2><span class="small">elige qué ver</span></div>
+      <div class="chips">
+        <div class="chip on" data-s="prod" onclick="toggleSeries('prod')"><span class="d" style="background:var(--prod2)"></span>Producción</div>
+        <div class="chip on" data-s="cons" onclick="toggleSeries('cons')"><span class="d" style="background:var(--cons2)"></span>Consumo</div>
+        <div class="chip on" data-s="exp" onclick="toggleSeries('exp')"><span class="d" style="background:var(--exp2)"></span>Vertido</div>
+        <div class="chip" data-s="imp" onclick="toggleSeries('imp')"><span class="d" style="background:var(--imp2)"></span>Comprado</div>
+      </div>
+      <div class="chart-box" style="height:250px"><canvas id="cInformes"></canvas></div>
+    </div>
+
+    <div class="grid rise d3" id="rTiles"></div>
+  </div>
+
+  <!-- FACTURA -->
+  <div class="page bill" id="pFactura">
+    <div class="glass hero rise d1" style="text-align:center">
+      <div class="live"><span class="pulse"></span>En tiempo real</div>
+      <div class="total">
+        <div class="k">Factura estimada · <span id="bMonthLbl">—</span></div>
+        <div class="v num">€<span id="bTotal">0,00</span></div>
+        <div class="est" id="bEst">—</div>
+      </div>
+    </div>
+
+    <div class="glass card rise d2">
+      <div class="ch"><h2>Desglose</h2><span class="small" id="bDays">—</span></div>
+      <div id="bBreak"></div>
+    </div>
+
+    <div class="glass card rise d3">
+      <div class="ch"><h2>Energía por periodo</h2></div>
+      <div id="bPeriods"></div>
+    </div>
+
+    <div class="note rise d4">
+      Estimación basada en tus datos simulados y la tarifa configurada en <b>Tarifa</b>.
+      La compensación de excedentes se limita al término de energía (no genera saldo a tu favor).
+      Modelo orientativo: una factura real puede incluir otros cargos menores.
+    </div>
+  </div>
+
+  <!-- TARIFA -->
+  <div class="page" id="pTarifa">
+    <div class="glass card rise d1">
+      <div class="ch"><h2>Precio de la energía</h2><span class="small">€/kWh</span></div>
+      <div class="prow"><div class="plab"><span class="d" style="background:var(--pun)"></span>Punta</div><div class="inp"><input id="tP" type="number" step="0.000001" inputmode="decimal"></div></div>
+      <div class="prow"><div class="plab"><span class="d" style="background:var(--lla)"></span>Llano</div><div class="inp"><input id="tLl" type="number" step="0.000001" inputmode="decimal"></div></div>
+      <div class="prow"><div class="plab"><span class="d" style="background:var(--val)"></span>Valle</div><div class="inp"><input id="tV" type="number" step="0.000001" inputmode="decimal"></div></div>
+    </div>
+
+    <div class="glass card rise d2">
+      <div class="ch"><h2>Franjas horarias</h2><span class="small">toca para cambiar</span></div>
+      <div class="bands" id="bands"></div>
+      <div class="seg" style="margin-top:12px">
+        <button id="wkBtn" class="on" onclick="toggleWeekend()">Findes y festivos = Valle</button>
+      </div>
+      <div class="hint">Toca cada hora para alternar <b style="color:var(--val)">Valle</b> → <b style="color:var(--lla)">Llano</b> → <b style="color:var(--pun)">Punta</b>. Prefijadas con tu tarifa "A tu Aire Luz".</div>
+    </div>
+
+    <div class="glass card rise d3">
+      <div class="ch"><h2>Potencia contratada</h2></div>
+      <div class="two" style="margin-top:8px">
+        <div class="fld" style="margin:0"><label>P1 punta (kW)</label><div class="inp"><input id="tKw1" type="number" step="0.1" inputmode="decimal"></div></div>
+        <div class="fld" style="margin:0"><label>P2 valle (kW)</label><div class="inp"><input id="tKw2" type="number" step="0.1" inputmode="decimal"></div></div>
+      </div>
+      <div class="fld" style="margin-top:11px"><label>Precio P1</label><div class="inp"><input id="tPp1" type="number" step="0.000001" inputmode="decimal"><span class="u">€/kW·día</span></div></div>
+      <div class="fld" style="margin-bottom:0"><label>Precio P2</label><div class="inp"><input id="tPp2" type="number" step="0.000001" inputmode="decimal"><span class="u">€/kW·día</span></div></div>
+    </div>
+
+    <div class="glass card rise d4">
+      <div class="ch"><h2>Excedentes e impuestos</h2></div>
+      <div class="fld" style="margin-top:8px"><label>Te pagan por excedente vertido</label><div class="inp"><input id="tExc" type="number" step="0.001" inputmode="decimal"><span class="u">€/kWh</span></div></div>
+      <div class="two">
+        <div class="fld" style="margin:0"><label>IVA</label><div class="inp"><input id="tIva" type="number" step="0.1" inputmode="decimal"><span class="u">%</span></div></div>
+        <div class="fld" style="margin:0"><label>Impuesto eléctrico</label><div class="inp"><input id="tIee" type="number" step="0.01" inputmode="decimal"><span class="u">%</span></div></div>
+      </div>
+      <div class="fld" style="margin-top:11px"><label>Alquiler del contador</label><div class="inp"><input id="tCont" type="number" step="0.001" inputmode="decimal"><span class="u">€/día</span></div></div>
+      <div class="fld"><label>Bono social</label><div class="inp"><input id="tBono" type="number" step="0.001" inputmode="decimal"><span class="u">€/día</span></div></div>
+      <div class="note">Por defecto, rebaja vigente hasta 30/06/2026: <b>IVA 10%</b> e <b>IEE 0,5%</b>. Desde el 1/06/2026 está previsto que vuelvan a 21% y 5,11%. Ajústalo cuando cambie.</div>
+    </div>
+
+    <button class="save" onclick="saveTariff()">Guardar tarifa</button>
+    <div class="saved" id="savedMsg">Guardado · factura actualizada ✓</div>
+  </div>
+</div>
+
+<nav class="tabbar"><div class="inner">
+  <button class="on" data-tab="Inicio" onclick="setTab('Inicio')"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 10 10h-10z" opacity=".55"/><path d="M12 2v10h10A10 10 0 0 0 12 2z"/></svg><span>Inicio</span></button>
+  <button data-tab="Informes" onclick="setTab('Informes')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg><span>Informes</span></button>
+  <button data-tab="Factura" onclick="setTab('Factura')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2zM9 7h6M9 11h6M9 15h4"/></svg><span>Factura</span></button>
+  <button data-tab="Tarifa" onclick="setTab('Tarifa')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><span>Tarifa</span></button>
+</div></nav>
+
+<script>
+const TODAY=new Date(2026,4,27);
+const MES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+const DIA=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+let state={tab:'Inicio',mode:'day',cursor:new Date(TODAY),series:{prod:true,cons:true,exp:true,imp:false}};
+let charts={};
+
+let tariff={
+  P:0.173572, Ll:0.10393, V:0.076176,
+  bands:['V','V','V','V','V','V','V','V','Ll','Ll','P','P','P','P','Ll','Ll','Ll','Ll','P','P','P','P','Ll','Ll'],
+  weekendValle:true, exc:0.07,
+  kw1:5.5, kw2:5.5, pp1:0.081479, pp2:0.081479,
+  iva:10, iee:0.5, cont:0.027, bono:0.019
+};
+const PCOL={P:'var(--pun)',Ll:'var(--lla)',V:'var(--val)'};
+const PHEX={P:'#FF453A',Ll:'#FFD60A',V:'#34C759'};
+const PNAME={P:'Punta',Ll:'Llano',V:'Valle'};
+
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function seedOf(d){return d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();}
+const SOLAR_M=[0.45,0.55,0.70,0.85,0.95,1.00,1.00,0.95,0.80,0.65,0.50,0.40];
+const CONS_M=[1.15,1.10,1.00,0.90,0.85,0.95,1.05,1.05,0.90,0.90,1.05,1.20];
+function genDay(d){
+  const r=mulberry32(seedOf(d)),m=d.getMonth();
+  const weather=0.50+0.55*r(), peak=3.2*SOLAR_M[m]*weather, sigma=2.4+1.0*SOLAR_M[m], cN=0.85+0.30*r();
+  const prod=[],cons=[],exp=[],imp=[],self=[];
+  for(let h=0;h<24;h++){
+    let p=peak*Math.exp(-Math.pow(h+0.5-13.3,2)/(2*sigma*sigma));p*=0.93+0.14*r();if(p<0.05)p=0;
+    let c=0.20+0.95*Math.exp(-Math.pow(h-8,2)/2.88)+1.45*Math.exp(-Math.pow(h-21,2)/5.12)+0.55*Math.exp(-Math.pow(h-14,2)/4.5);
+    c*=CONS_M[m]*cN*(0.92+0.16*r());
+    const s=Math.min(p,c);prod.push(p);cons.push(c);self.push(s);exp.push(Math.max(0,p-c));imp.push(Math.max(0,c-p));
+  }
+  return {prod,cons,exp,imp,self};
+}
+const sum=a=>a.reduce((x,y)=>x+y,0);
+function dayTotals(d){const g=genDay(d);return{prod:sum(g.prod),cons:sum(g.cons),exp:sum(g.exp),imp:sum(g.imp),self:sum(g.self),h:g};}
+function daysInMonth(y,m){return new Date(y,m+1,0).getDate();}
+function monthAgg(d){
+  const y=d.getFullYear(),m=d.getMonth(),cur=(y===TODAY.getFullYear()&&m===TODAY.getMonth());
+  const last=cur?TODAY.getDate():daysInMonth(y,m);
+  const labels=[],prod=[],cons=[],exp=[],imp=[];let t={prod:0,cons:0,exp:0,imp:0,self:0};
+  for(let day=1;day<=last;day++){const dt=dayTotals(new Date(y,m,day));labels.push(day);prod.push(dt.prod);cons.push(dt.cons);exp.push(dt.exp);imp.push(dt.imp);t.prod+=dt.prod;t.cons+=dt.cons;t.exp+=dt.exp;t.imp+=dt.imp;t.self+=dt.self;}
+  return{labels,prod,cons,exp,imp,totals:t};
+}
+
+function periodOf(hour,date){const wd=date.getDay();if(tariff.weekendValle&&(wd===0||wd===6))return 'V';return tariff.bands[hour];}
+function computeBill(y,m,lastDay){
+  let eByP={P:0,Ll:0,V:0},expTotal=0,impTotal=0;
+  for(let day=1;day<=lastDay;day++){const date=new Date(y,m,day),g=genDay(date);
+    for(let h=0;h<24;h++){const per=periodOf(h,date);eByP[per]+=g.imp[h]*tariff[per];expTotal+=g.exp[h];impTotal+=g.imp[h];}}
+  const energyGross=eByP.P+eByP.Ll+eByP.V;
+  const power=(tariff.kw1*tariff.pp1+tariff.kw2*tariff.pp2)*lastDay;
+  const contador=tariff.cont*lastDay;
+  const bono=tariff.bono*lastDay;
+  let comp=expTotal*tariff.exc;if(comp>energyGross)comp=energyGross;   // tope: no supera el término de energía
+  const energy=energyGross-comp;                                       // energía neta (excedente descontado)
+  // IEE: tipo sobre energía+potencia, con mínimo legal de 1 €/MWh sobre kWh importados
+  const iee=Math.max((tariff.iee/100)*(energy+power), 0.001*impTotal);
+  const base=energy+power+bono+contador+iee;                           // base imponible IVA
+  const iva=(tariff.iva/100)*base;
+  return{eByP,energyGross,energy,power,bono,contador,comp,iee,iva,total:base+iva,kwhExp:expTotal};
+}
+
+const f1=n=>n.toLocaleString('es-ES',{minimumFractionDigits:1,maximumFractionDigits:1});
+const f0=n=>Math.round(n).toLocaleString('es-ES');
+const e2=n=>n.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2});
+const pct=(a,b)=>b>0?Math.round(100*a/b):0;
+
+function setTab(t){state.tab=t;document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));document.getElementById('p'+t).classList.add('on');document.querySelectorAll('.tabbar button').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));render();}
+function setMode(m){state.mode=m;document.querySelectorAll('.seg button[data-mode]').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));render();}
+function sameDay(a,b){return a.toDateString()===b.toDateString();}
+function atLimit(){if(state.mode==='day')return sameDay(state.cursor,TODAY);return state.cursor.getFullYear()===TODAY.getFullYear()&&state.cursor.getMonth()===TODAY.getMonth();}
+function nav(dir){if(dir>0&&atLimit())return;const c=new Date(state.cursor);if(state.mode==='day')c.setDate(c.getDate()+dir);else c.setMonth(c.getMonth()+dir);if(c>TODAY)return;state.cursor=c;render();}
+function toggleSeries(s){const on=Object.values(state.series).filter(Boolean).length;if(state.series[s]&&on<=1)return;state.series[s]=!state.series[s];document.querySelector('.chip[data-s="'+s+'"]').classList.toggle('on',state.series[s]);renderInformes();}
+function toggleWeekend(){tariff.weekendValle=!tariff.weekendValle;document.getElementById('wkBtn').classList.toggle('on',tariff.weekendValle);}
+
+function render(){document.querySelectorAll('.rnd').forEach(b=>{if(b.id.endsWith('Next'))b.disabled=atLimit();});if(state.tab==='Inicio')renderInicio();else if(state.tab==='Informes')renderInformes();else if(state.tab==='Factura')renderFactura();}
+function periodLabels(prefix){const d=state.cursor,main=document.getElementById(prefix+'Main'),sub=document.getElementById(prefix+'Sub');
+  if(state.mode==='day'){main.textContent=sameDay(d,TODAY)?'Hoy':`${DIA[d.getDay()]} ${d.getDate()}`;sub.textContent=`${d.getDate()} de ${MES[d.getMonth()]} de ${d.getFullYear()}`;}
+  else{main.textContent=`${MES[d.getMonth()]} ${d.getFullYear()}`;const cur=(d.getFullYear()===TODAY.getFullYear()&&d.getMonth()===TODAY.getMonth());sub.textContent=cur?`del 1 al ${TODAY.getDate()} (en curso)`:'mes completo';}}
+function periodData(){
+  if(state.mode==='day'){const dt=dayTotals(state.cursor);return{t:dt,labels:Array.from({length:24},(_,h)=>h%3===0?h+'h':''),prod:dt.h.prod,cons:dt.h.cons,exp:dt.h.exp,imp:dt.h.imp,unit:'kW'};}
+  const md=monthAgg(state.cursor);return{t:md.totals,labels:md.labels.map(n=>n%5===0||n===1?''+n:''),prod:md.prod,cons:md.cons,exp:md.exp,imp:md.imp,unit:'kWh'};}
+
+function renderInicio(){
+  periodLabels('i');const D=periodData(),t=D.t,fmt=state.mode==='day'?f1:f0;
+  document.getElementById('iHero').textContent=fmt(t.prod);
+  document.getElementById('iSum').innerHTML=t.prod<0.2?'Sin producción registrada.':`El sol cubrió el <b>${pct(t.self,t.cons)}%</b> de tu consumo. Vertiste <b>${fmt(t.exp)} kWh</b> a la red.`;
+  document.getElementById('iCons').textContent=fmt(t.cons);
+  document.getElementById('iExp').textContent=fmt(t.exp);
+  document.getElementById('iImp').textContent=fmt(t.imp);
+  document.getElementById('iCost').textContent=e2(periodCost());
+  const ss=pct(t.self,t.cons),sc=pct(t.self,t.prod);
+  document.getElementById('iSS').textContent=ss+'%';document.getElementById('iSC').textContent=sc+'%';
+  requestAnimationFrame(()=>{document.getElementById('fSS').style.width=ss+'%';document.getElementById('fSC').style.width=sc+'%';});
+  drawCompare('cInicio',D,{prod:true,cons:true,exp:true,imp:false});
+}
+function periodCost(){
+  let energy=0,exp=0;const addDay=date=>{const g=genDay(date);for(let h=0;h<24;h++){const per=periodOf(h,date);energy+=g.imp[h]*tariff[per];exp+=g.exp[h];}};
+  if(state.mode==='day')addDay(state.cursor);
+  else{const y=state.cursor.getFullYear(),m=state.cursor.getMonth(),cur=(y===TODAY.getFullYear()&&m===TODAY.getMonth()),last=cur?TODAY.getDate():daysInMonth(y,m);for(let d=1;d<=last;d++)addDay(new Date(y,m,d));}
+  let comp=exp*tariff.exc;if(comp>energy)comp=energy;return Math.max(0,energy-comp);
+}
+function renderInformes(){
+  periodLabels('r');const D=periodData();drawCompare('cInformes',D,state.series);
+  const fmt=state.mode==='day'?f1:f0,t=D.t;
+  const defs=[['prod','Producción','--prod1','--prod2',t.prod],['cons','Consumo','--cons1','--cons2',t.cons],['exp','Vertido','--exp1','--exp2',t.exp],['imp','Comprado','--imp1','--imp2',t.imp]];
+  document.getElementById('rTiles').innerHTML=defs.filter(d=>state.series[d[0]]).map(d=>`<div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(${d[2]}),var(${d[3]}))"></div><div class="t">${d[1]}</div><div class="v num">${fmt(d[4])}<small>kWh</small></div></div>`).join('');
+}
+function renderFactura(){
+  const y=TODAY.getFullYear(),m=TODAY.getMonth(),today=TODAY.getDate(),full=daysInMonth(y,m);
+  const cur=computeBill(y,m,today),est=computeBill(y,m,full);
+  document.getElementById('bMonthLbl').textContent=`${MES[m]} ${y}`;
+  document.getElementById('bTotal').textContent=e2(cur.total);
+  document.getElementById('bEst').innerHTML=`Estimación a fin de mes: <b style="color:#fff">€${e2(est.total)}</b>`;
+  document.getElementById('bDays').textContent=`${today} de ${full} días`;
+  document.getElementById('bBreak').innerHTML=
+    line('Término de energía','consumo de red por periodos','€'+e2(cur.energyGross))+
+    line('Término de potencia',`${f1(tariff.kw1+tariff.kw2)} kW · ${today} días`,'€'+e2(cur.power))+
+    line('Compensación excedentes',`${f1(cur.kwhExp)} kWh × ${e2(tariff.exc)} €`,'−€'+e2(cur.comp),'neg')+
+    line('Bono social',`${e2(tariff.bono)} €/día`,'€'+e2(cur.bono))+
+    line('Alquiler contador',`${e2(tariff.cont)} €/día`,'€'+e2(cur.contador))+
+    line('Impuesto eléctrico',`${e2(tariff.iee)}% (mín. 1 €/MWh)`,'€'+e2(cur.iee))+
+    line('IVA',`${e2(tariff.iva)}%`,'€'+e2(cur.iva))+
+    line('Total a pagar','','€'+e2(cur.total),'tot');
+  document.getElementById('bPeriods').innerHTML=['P','Ll','V'].map(p=>`<div class="line"><span class="lk" style="display:flex;align-items:center;gap:8px"><span style="width:11px;height:11px;border-radius:3px;background:${PCOL[p]};display:inline-block"></span>${PNAME[p]}</span><span class="lv">€${e2(cur.eByP[p])}</span></div>`).join('');
+}
+function line(k,s,v,cls=''){return `<div class="line ${cls}"><span class="lk">${k}${s?`<small>${s}</small>`:''}</span><span class="lv">${v}</span></div>`;}
+
+function grad(ctx,h){const g=ctx.createLinearGradient(0,0,0,240);g.addColorStop(0,h+'66');g.addColorStop(1,h+'05');return g;}
+function drawCompare(id,D,vis){
+  if(charts[id])charts[id].destroy();
+  const ctx=document.getElementById(id).getContext('2d');
+  const C={prod:'#FFB833',cons:'#0A84FF',exp:'#30D158',imp:'#FF6B6B'},N={prod:'Producción',cons:'Consumo',exp:'Vertido',imp:'Comprado'};
+  const ds=[];['prod','cons','exp','imp'].forEach(k=>{if(!vis[k])return;ds.push({label:N[k],data:D[k],borderColor:C[k],backgroundColor:grad(ctx,C[k]),fill:true,tension:.4,borderWidth:2.4,pointRadius:0});});
+  charts[id]=new Chart(ctx,{type:'line',data:{labels:D.labels,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},animation:{duration:650},
+    plugins:{legend:{display:false},tooltip:{backgroundColor:'rgba(20,16,46,.95)',borderColor:'rgba(255,255,255,.15)',borderWidth:1,padding:10,cornerRadius:10,titleColor:'#fff',bodyColor:'rgba(255,255,255,.85)',callbacks:{label:c=>` ${c.dataset.label}: ${f1(c.parsed.y)} ${D.unit}`}}},
+    scales:{x:{grid:{display:false},border:{color:'rgba(255,255,255,.12)'},ticks:{color:'rgba(255,255,255,.5)',font:{size:11},maxRotation:0,autoSkip:false}},y:{grid:{color:'rgba(255,255,255,.08)'},border:{display:false},ticks:{color:'rgba(255,255,255,.5)',font:{size:11},maxTicksLimit:5},beginAtZero:true}}}});
+}
+
+function buildBands(){document.getElementById('bands').innerHTML=tariff.bands.map((p,h)=>`<div class="hr" style="background:${PHEX[p]}" data-h="${h}" onclick="cycleHour(${h})">${h}</div>`).join('');}
+function cycleHour(h){const order=['V','Ll','P'],i=order.indexOf(tariff.bands[h]);tariff.bands[h]=order[(i+1)%3];document.querySelector('.hr[data-h="'+h+'"]').style.background=PHEX[tariff.bands[h]];}
+function fillForm(){tP.value=tariff.P;tLl.value=tariff.Ll;tV.value=tariff.V;tKw1.value=tariff.kw1;tKw2.value=tariff.kw2;tPp1.value=tariff.pp1;tPp2.value=tariff.pp2;tExc.value=tariff.exc;tIva.value=tariff.iva;tIee.value=tariff.iee;tCont.value=tariff.cont;tBono.value=tariff.bono;document.getElementById('wkBtn').classList.toggle('on',tariff.weekendValle);}
+function num(id,d){const v=parseFloat(document.getElementById(id).value.replace(',','.'));return isNaN(v)?d:v;}
+function saveTariff(){
+  tariff.P=num('tP',tariff.P);tariff.Ll=num('tLl',tariff.Ll);tariff.V=num('tV',tariff.V);
+  tariff.kw1=num('tKw1',tariff.kw1);tariff.kw2=num('tKw2',tariff.kw2);tariff.pp1=num('tPp1',tariff.pp1);tariff.pp2=num('tPp2',tariff.pp2);
+  tariff.exc=num('tExc',tariff.exc);tariff.iva=num('tIva',tariff.iva);tariff.iee=num('tIee',tariff.iee);tariff.cont=num('tCont',tariff.cont);tariff.bono=num('tBono',tariff.bono);
+  const m=document.getElementById('savedMsg');m.classList.add('on');setTimeout(()=>m.classList.remove('on'),2200);
+  renderFactura();renderInicio();
+}
+
+buildBands();fillForm();render();
+</script>
+</body>
+</html>
