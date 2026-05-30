@@ -188,7 +188,7 @@
       <svg class="logo" viewBox="0 0 64 64"><circle cx="32" cy="32" r="12" fill="#FFB833"/><g stroke="#FFB833" stroke-width="5" stroke-linecap="round"><line x1="32" y1="6" x2="32" y2="14"/><line x1="32" y1="50" x2="32" y2="58"/><line x1="6" y1="32" x2="14" y2="32"/><line x1="50" y1="32" x2="58" y2="32"/><line x1="13" y1="13" x2="19" y2="19"/><line x1="45" y1="45" x2="51" y2="51"/><line x1="51" y1="13" x2="45" y2="19"/><line x1="19" y1="45" x2="13" y2="51"/></g></svg>
       <h1>SolarNest</h1>
     </div>
-    <div class="demo">Consumo: Datadis</div>
+    <div class="demo" id="syncBadge" onclick="manualRefresh()" style="cursor:pointer" title="Toca para forzar actualización">Datadis · cargando…</div>
   </div>
 
   <!-- INICIO -->
@@ -362,8 +362,8 @@ function seedOf(d){return d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate()
 
 // === DATOS REALES de consumo de red (Datadis) ===
 // Clave AAAA/MM/DD -> kWh consumidos ese día. De momento mayo 2026 (lectura real).
-// Cuando conectemos la lectura automática, este objeto se rellenará solo.
-const REAL_CONS={
+// Datos semilla incrustados (mayo 2026, día 1-27): respaldo si no hay cache ni red.
+const SEED_REAL_CONS={
  '2026/05/01':15.487,'2026/05/02':15.721,'2026/05/03':15.866,'2026/05/04':15.722,
  '2026/05/05':15.76,'2026/05/06':15.233,'2026/05/07':12.506,'2026/05/08':12.737,
  '2026/05/09':13.046,'2026/05/10':12.625,'2026/05/11':15.42,'2026/05/12':15.708,
@@ -372,8 +372,97 @@ const REAL_CONS={
  '2026/05/21':4.655,'2026/05/22':4.242,'2026/05/23':23.989,'2026/05/24':18.09,
  '2026/05/25':10.41,'2026/05/26':3.892,'2026/05/27':3.602
 };
+// REAL_CONS empieza con los datos semilla y se enriquece con cache + llamadas a Datadis.
+let REAL_CONS = Object.assign({}, SEED_REAL_CONS);
 function dayKey(d){return d.getFullYear()+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0');}
 function realConsOf(d){const k=dayKey(d);return (k in REAL_CONS)?REAL_CONS[k]:null;}
+
+// ========= SISTEMA DE AUTO-ACTUALIZACIÓN DATADIS =========
+const LS_DATA='datadis_data', LS_TIME='datadis_lastUpdate', LS_ERR='datadis_lastError';
+const REFRESH_AGE_MS = 6*3600*1000;    // datos viejos si >6h
+const MANUAL_COOLDOWN_MS = 60*1000;    // tap manual: 1 min
+let isFetching=false, lastManualTap=0;
+
+// Lee del almacenamiento del navegador los datos guardados de sesiones anteriores
+function loadCache(){
+  try{
+    const raw=localStorage.getItem(LS_DATA);
+    if(raw){const obj=JSON.parse(raw);if(obj && typeof obj==='object')Object.assign(REAL_CONS,obj);}
+  }catch(e){console.warn('Cache load failed',e);}
+}
+// Guarda los datos en el navegador para no perderlos al cerrar la app
+function saveCache(){
+  try{localStorage.setItem(LS_DATA,JSON.stringify(REAL_CONS));}catch(e){console.warn('Cache save failed',e);}
+}
+function getLastUpdate(){const t=parseInt(localStorage.getItem(LS_TIME)||'0',10);return isNaN(t)?0:t;}
+function setLastUpdate(t){try{localStorage.setItem(LS_TIME,String(t));}catch(e){}}
+function getLastError(){return localStorage.getItem(LS_ERR)||'';}
+function setLastError(s){try{s?localStorage.setItem(LS_ERR,s):localStorage.removeItem(LS_ERR);}catch(e){}}
+
+// Texto humano para "hace cuánto tiempo"
+function timeAgo(ms){
+  if(!ms)return 'sin sincronizar';
+  const diff=Date.now()-ms;
+  if(diff<60*1000)return 'ahora';
+  const min=Math.floor(diff/60000);if(min<60)return 'hace '+min+' min';
+  const h=Math.floor(min/60);if(h<24)return 'hace '+h+' h';
+  const d=Math.floor(h/24);return 'hace '+d+(d===1?' día':' días');
+}
+// Actualiza el cartel del badge según estado
+function updateBadge(){
+  const el=document.getElementById('syncBadge');if(!el)return;
+  if(isFetching){el.textContent='Datadis · actualizando…';el.style.opacity='.7';return;}
+  el.style.opacity='1';
+  const t=getLastUpdate(),err=getLastError();
+  if(err && !t){el.textContent='Datadis · sin conexión';return;}
+  if(err){el.textContent='Datadis · '+timeAgo(t)+' (sin conexión)';return;}
+  el.textContent='Datadis · '+timeAgo(t);
+}
+
+// Llama a nuestra función serverless para traer el mes actual
+async function fetchDatadisCurrentMonth(){
+  if(isFetching)return;isFetching=true;updateBadge();
+  try{
+    const resp=await fetch('/api/datadis-consumo',{cache:'no-store'});
+    const data=await resp.json();
+    if(!data || !data.ok){throw new Error(data && data.pista ? data.pista : 'API error');}
+    if(Array.isArray(data.consumoPorDia)){
+      let nuevos=0;
+      for(const item of data.consumoPorDia){
+        if(item && item.dia && typeof item.kwh==='number'){
+          if(REAL_CONS[item.dia]!==item.kwh)nuevos++;
+          REAL_CONS[item.dia]=item.kwh;
+        }
+      }
+      saveCache();setLastUpdate(Date.now());setLastError('');
+      if(nuevos>0)render();
+    }
+  }catch(e){
+    console.warn('Datadis fetch failed:',e.message||e);
+    setLastError(String(e.message||e));
+  }finally{
+    isFetching=false;updateBadge();
+  }
+}
+
+// Decide si toca actualizar según la edad de los datos
+function maybeRefresh(){
+  const age=Date.now()-getLastUpdate();
+  if(age>REFRESH_AGE_MS)fetchDatadisCurrentMonth();
+}
+// Tap en el badge: refresh manual con cooldown anti-spam
+function manualRefresh(){
+  const now=Date.now();
+  if(now-lastManualTap<MANUAL_COOLDOWN_MS){updateBadge();return;}
+  lastManualTap=now;
+  fetchDatadisCurrentMonth();
+}
+// Inicializa al arrancar: carga cache → render → fetch en background si toca
+function initData(){
+  loadCache();updateBadge();
+  // pequeño retraso para que la UI pinte primero, luego ya se actualiza
+  setTimeout(()=>{maybeRefresh();},300);
+}
 
 const CONS_M=[1.15,1.10,1.00,0.90,0.85,0.95,1.05,1.05,0.90,0.90,1.05,1.20];
 // genDay: si hay dato REAL del día, lo reparte en 24h con una forma realista.
@@ -544,7 +633,7 @@ function saveTariff(){
   renderFactura();renderInicio();
 }
 
-buildBands();fillForm();render();
+buildBands();fillForm();render();initData();
 </script>
 </body>
 </html>
