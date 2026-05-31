@@ -583,20 +583,29 @@ async function fetchDatadisCurrentMonth(){
   }
 }
 
-// Sincroniza meses históricos que no tengamos en cache (sin bloquear la UI)
-// Va hacia atrás mes a mes desde el mes anterior al actual, hasta 3 años
+// Sincroniza UN mes histórico por sesión que no tengamos en cache.
+// Cooldown de 7 días entre ejecuciones completas para no saturar Datadis (error 429).
+const LS_HIST='datadis_histLastRun';
 async function fetchDatadisHistory(){
+  // Cooldown: si ya corrió en los últimos 7 días, no hacer nada
+  try{
+    const last=parseInt(localStorage.getItem(LS_HIST)||'0');
+    if(Date.now()-last < 7*24*60*60*1000) return;
+  }catch(e){}
+
   const now=new Date();
-  let y=now.getFullYear(), m=now.getMonth()-1; // empieza en el mes anterior
+  let y=now.getFullYear(), m=now.getMonth()-1;
   if(m<0){m=11;y--;}
-  const limite=36; // máximo 36 meses hacia atrás
-  for(let i=0;i<limite;i++){
+
+  // Encuentra el primer mes sin datos suficientes (< 5 días)
+  for(let i=0;i<60;i++){
+    if(y<2021||(y===2021&&m<5))break;
     const mesKey=y+'/'+String(m+1).padStart(2,'0');
-    // ¿Ya tenemos datos de este mes? Comprueba si hay al menos 5 días con datos
-    const diasConDatos=Object.keys(REAL_CONS).filter(k=>k.startsWith(mesKey.replace('/','/').slice(0,7))).length;
+    const prefix=y+'/'+String(m+1).padStart(2,'0')+'/';
+    const diasConDatos=Object.keys(REAL_CONS).filter(k=>k.startsWith(prefix)).length;
     if(diasConDatos<5){
-      // Espera un poco entre llamadas para no saturar Datadis
-      await new Promise(r=>setTimeout(r,1500));
+      // Lanza UNA sola petición y para. La siguiente sesión cogerá el siguiente mes.
+      await new Promise(r=>setTimeout(r,2000));
       try{
         const resp=await fetch('/api/datadis-consumo?mes='+encodeURIComponent(mesKey),{cache:'no-store'});
         const data=await resp.json();
@@ -605,12 +614,19 @@ async function fetchDatadisHistory(){
             if(item && item.dia && typeof item.kwh==='number') REAL_CONS[item.dia]=item.kwh;
           }
           saveCache();render();
+          console.log('History: sincronizado',mesKey);
+        } else {
+          console.warn('History: no se pudo sincronizar',mesKey, data && data.pista);
         }
       }catch(e){console.warn('History fetch failed for',mesKey,e);}
+      // Marca la ejecución aunque haya fallado, para respetar el cooldown
+      try{localStorage.setItem(LS_HIST,String(Date.now()));}catch(e){}
+      return; // Una sola llamada por sesión, siempre
     }
     m--;if(m<0){m=11;y--;}
-    if(y<2021||(y===2021&&m<5))break; // Datadis disponible desde junio 2021
   }
+  // Si todos los meses ya tienen datos, marca igualmente para no volver a comprobar pronto
+  try{localStorage.setItem(LS_HIST,String(Date.now()));}catch(e){}
 }
 
 // Decide si toca actualizar según la edad de los datos
