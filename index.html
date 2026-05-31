@@ -261,10 +261,16 @@
 
   <!-- FACTURA -->
   <div class="page bill" id="pFactura">
+    <div class="pnav">
+      <button class="rnd" id="bPrev" onclick="navBill(-1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+      <div class="lbl"><b id="bMonthLbl">—</b><span id="bComercializador" style="font-size:11px;color:var(--muted)">—</span></div>
+      <button class="rnd" id="bNext" onclick="navBill(1)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+    </div>
+
     <div class="glass hero" style="text-align:center">
       <div class="live"><span class="pulse"></span>En tiempo real</div>
       <div class="total">
-        <div class="k">Factura estimada · <span id="bMonthLbl">—</span></div>
+        <div class="k">Factura estimada · <span id="bMonthLbl2"></span></div>
         <div class="v num">€<span id="bTotal">0,00</span></div>
         <div class="est" id="bEst">—</div>
       </div>
@@ -281,9 +287,10 @@
     </div>
 
     <div class="note">
-      Estimación basada en tu consumo real (Datadis) y la tarifa configurada en <b>Tarifa</b>.
-      La compensación de excedentes se limita al término de energía (no genera saldo a tu favor).
-      Modelo orientativo: una factura real puede incluir otros cargos menores.
+      Estimación basada en tu consumo real (Datadis) y la tarifa del periodo correspondiente.
+      Para periodos con <b>Energía XXI (PVPC)</b> los precios son aproximaciones anuales, no el precio horario real.
+      IVA e IEE se aplican según la normativa vigente en cada mes.
+      El modelo es orientativo; una factura real puede incluir otros cargos menores.
     </div>
   </div>
 
@@ -340,18 +347,114 @@
 </div></nav>
 
 <script>
-const TODAY=new Date(2026,4,27);
+const TODAY=new Date();
 const MES=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const DIA=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
-let state={tab:'Inicio',mode:'day',cursor:new Date(TODAY),series:{prod:false,cons:true,exp:false,imp:false}};
+let state={tab:'Inicio',mode:'day',cursor:new Date(TODAY),series:{prod:false,cons:true,exp:false,imp:false},
+  billYear:TODAY.getFullYear(), billMonth:TODAY.getMonth()};
 let charts={};
 
+// =====================================================================
+//  TARIFAS HISTÓRICAS POR TRAMOS DE FECHA
+//  2023-2025 Energía XXI: precios €/kWh medios reales de tus facturas.
+//  El PVPC es horario; aquí usamos el precio medio mensual real
+//  (€ factura total / kWh totales) como mejor aproximación disponible.
+//  Octopus Solar y Total Energies: precios fijos exactos de contrato.
+// =====================================================================
+
+// Precio medio mensual real Energía XXI (€ término energía / kWh consumidos, de facturas reales)
+// 2021: datos reales. Antes de jun/21 era tarifa 2.0A sin franja horaria.
+// 2022: datos reales de cada factura.
+// 2023-2025: de la tabla de facturas aportada.
+const PVPC_REAL = {
+  // 2021 — facturas reales (jun-dic, inicio Datadis)
+  '2021/06':0.164,'2021/07':0.151,'2021/08':0.166,'2021/09':0.197,
+  '2021/10':0.227,'2021/11':0.256,'2021/12':0.264,
+  // 2022 — facturas reales
+  '2022/01':0.310,'2022/02':0.309,'2022/03':0.371,'2022/04':0.265,
+  '2022/05':0.263,'2022/06':0.300,'2022/07':0.335,'2022/08':0.412,
+  '2022/09':0.302,'2022/10':0.202,'2022/11':0.225,'2022/12':0.158,
+  // 2023 — facturas reales
+  '2023/01':0.23,'2023/02':0.31,'2023/03':0.23,'2023/04':0.24,
+  '2023/05':0.23,'2023/06':0.27,'2023/07':0.26,'2023/08':0.27,
+  '2023/09':0.20,'2023/10':0.17,'2023/11':0.16,'2023/12':0.16,
+  // 2024 — facturas reales
+  '2024/01':0.18,'2024/02':0.14,'2024/03':0.14,'2024/04':0.15,
+  '2024/05':0.17,'2024/06':0.17,'2024/07':0.17,'2024/08':0.18,
+  '2024/09':0.20,'2024/10':0.21,'2024/11':0.22,'2024/12':0.25,
+  // 2025 ene-may Energía XXI — facturas reales
+  '2025/01':0.24,'2025/02':0.26,'2025/03':0.19,'2025/04':0.20,'2025/05':0.19,
+};
+
+// Construye tarifa PVPC para una fecha: reparte el precio medio entre P/Ll/V
+// con proporciones típicas del mercado (P≈45%, Ll≈30%, V≈25% del precio medio)
+function pvpcTariff(date){
+  const key=date.getFullYear()+'/'+String(date.getMonth()+1).padStart(2,'0');
+  const avg=PVPC_REAL[key]||0.20;
+  return {
+    P:+(avg*1.35).toFixed(6), Ll:+(avg*0.95).toFixed(6), V:+(avg*0.65).toFixed(6),
+    exc:+(avg*0.40).toFixed(6),
+    pp1:0.081479, pp2:0.081479,
+    bands:['V','V','V','V','V','V','V','V','Ll','Ll','P','P','P','P','Ll','Ll','Ll','Ll','P','P','P','P','Ll','Ll'],
+    weekendValle:true, kw1:5.5, kw2:5.5, cont:0.026630, bono:0.012742,
+    _isPVPC:true, _avg:avg
+  };
+}
+
+const TARIFF_OCTOPUS = {
+  P:0.204, Ll:0.124, V:0.083, exc:0.04,
+  pp1:0.097, pp2:0.027,
+  bands:['V','V','V','V','V','V','V','V','Ll','Ll','P','P','P','P','Ll','Ll','Ll','Ll','P','P','P','P','Ll','Ll'],
+  weekendValle:true, kw1:5.5, kw2:5.5, cont:0.026630, bono:0.019
+};
+const TARIFF_TOTAL = {
+  P:0.173572, Ll:0.10393, V:0.076176, exc:0.07,
+  pp1:0.081479, pp2:0.081479,
+  bands:['V','V','V','V','V','V','V','V','Ll','Ll','P','P','P','P','Ll','Ll','Ll','Ll','P','P','P','P','Ll','Ll'],
+  weekendValle:true, kw1:5.5, kw2:5.5, cont:0.026630, bono:0.019
+};
+
+// Devuelve la tarifa aplicable a una fecha dada
+function tariffFor(date){
+  const key=date.getFullYear()+'/'+String(date.getMonth()+1).padStart(2,'0')+'/'+String(date.getDate()).padStart(2,'0');
+  if(key>='2026/05/20') return TARIFF_TOTAL;
+  if(key>='2025/06/01') return TARIFF_OCTOPUS;
+  return pvpcTariff(date); // Energía XXI PVPC
+}
+
+// =====================================================================
+//  IVA / IEE HISTÓRICO
+//  Devuelve {iva, iee, ieePct} para un año/mes dado.
+//  Fuentes: RDL 17/2021, RDL 11/2022, RDL 1/2023, RDL 8/2023,
+//           normalización 2024, RDL 7/2026.
+// =====================================================================
+function taxesFor(year, month){ // month 0-based
+  const ym = year*100 + (month+1);
+  // Desde RDL 7/2026 (marzo 2026): IEE reducido al 0,5% (mín 1€/MWh), IVA 10%
+  if(ym >= 202603) return {iva:10, iee:0.5, ieeMin:0.001};
+  // Ene-Feb 2026: IEE 5,11%, IVA 21%
+  if(ym >= 202601) return {iva:21, iee:5.1126963, ieeMin:0.001};
+  // 2025: IVA 21%, IEE 5,11%
+  if(ym >= 202501) return {iva:21, iee:5.1126963, ieeMin:0.001};
+  // Jun 2023 – Dic 2024: IVA 10%, IEE 2,5%
+  if(ym >= 202306) return {iva:10, iee:2.5, ieeMin:0.0005};
+  // Ene – May 2023: IVA 5%, IEE 0,5%
+  if(ym >= 202301) return {iva:5, iee:0.5, ieeMin:0.0005};
+  // Jun 2022 – Dic 2022: IVA 5%, IEE 0,5%
+  if(ym >= 202206) return {iva:5, iee:0.5, ieeMin:0.0005};
+  // Ene – May 2022: IVA 10%, IEE 0,5%
+  if(ym >= 202201) return {iva:10, iee:0.5, ieeMin:0.0005};
+  // Hasta dic 2021: IVA 21%, IEE 5,11%
+  return {iva:21, iee:5.1126963, ieeMin:0.001};
+}
+
+// tariff activo (para la pestaña Tarifa y compatibilidad con el resto del código)
 let tariff={
   P:0.173572, Ll:0.10393, V:0.076176,
   bands:['V','V','V','V','V','V','V','V','Ll','Ll','P','P','P','P','Ll','Ll','Ll','Ll','P','P','P','P','Ll','Ll'],
   weekendValle:true, exc:0.07,
   kw1:5.5, kw2:5.5, pp1:0.081479, pp2:0.081479,
-  iva:10, iee:0.5, cont:0.027, bono:0.019
+  iva:10, iee:0.5, cont:0.026630, bono:0.019
 };
 const PCOL={P:'var(--pun)',Ll:'var(--lla)',V:'var(--val)'};
 const PHEX={P:'#FF453A',Ll:'#FFD60A',V:'#34C759'};
@@ -360,18 +463,53 @@ const PNAME={P:'Punta',Ll:'Llano',V:'Valle'};
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 function seedOf(d){return d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();}
 
-// === DATOS REALES de consumo de red (Datadis) ===
-// Clave AAAA/MM/DD -> kWh consumidos ese día. De momento mayo 2026 (lectura real).
-// Datos semilla incrustados (mayo 2026, día 1-27): respaldo si no hay cache ni red.
-const SEED_REAL_CONS={
- '2026/05/01':15.487,'2026/05/02':15.721,'2026/05/03':15.866,'2026/05/04':15.722,
- '2026/05/05':15.76,'2026/05/06':15.233,'2026/05/07':12.506,'2026/05/08':12.737,
- '2026/05/09':13.046,'2026/05/10':12.625,'2026/05/11':15.42,'2026/05/12':15.708,
- '2026/05/13':15.599,'2026/05/14':14.886,'2026/05/15':14.844,'2026/05/16':14.211,
- '2026/05/17':14.782,'2026/05/18':14.44,'2026/05/19':5.505,'2026/05/20':4.717,
- '2026/05/21':4.655,'2026/05/22':4.242,'2026/05/23':23.989,'2026/05/24':18.09,
- '2026/05/25':10.41,'2026/05/26':3.892,'2026/05/27':3.602
+// === DATOS REALES de consumo de red — kWh de facturas reales ===
+// Los totales mensuales se distribuyen uniformemente entre días del mes.
+// Datadis irá sobreescribiendo con datos horarios reales al sincronizar.
+const SEED_MONTHLY_KWH={
+  // 2021 — facturas reales (Datadis disponible desde jun/2021)
+  '2021/06':21,'2021/07':150,'2021/08':156,'2021/09':124,
+  '2021/10':143,'2021/11':131,'2021/12':140,
+  // 2022 — facturas reales Energía XXI
+  '2022/01':154,'2022/02':145,'2022/03':151,'2022/04':168,
+  '2022/05':154,'2022/06':135,'2022/07':154,'2022/08':153,
+  '2022/09':161,'2022/10':147,'2022/11':217,'2022/12':175,
+  // 2023 — facturas reales Energía XXI
+  '2023/01':165.96,'2023/02':155.58,'2023/03':208.97,'2023/04':148.80,
+  '2023/05':160.28,'2023/06':173.02,'2023/07':147.24,'2023/08':168.58,
+  '2023/09':883.57,'2023/10':605.83,'2023/11':999.38,'2023/12':1006.03,
+  // 2024 — facturas reales Energía XXI
+  '2024/01':1042.72,'2024/02':712.22,'2024/03':599.14,'2024/04':520.21,
+  '2024/05':686.18,'2024/06':858.69,'2024/07':317.03,'2024/08':374.11,
+  '2024/09':477.00,'2024/10':329.17,'2024/11':978.27,'2024/12':870.76,
+  // 2025 ene-may — facturas reales Energía XXI
+  '2025/01':1056.92,'2025/02':498.31,'2025/03':552.74,'2025/04':356.46,'2025/05':567.05,
+  // 2025 jun-dic — facturas reales Octopus
+  '2025/06':713.13,'2025/07':471.00,'2025/08':919.00,'2025/09':327.00,
+  '2025/10':494.00,'2025/11':967.00,'2025/12':1170.00,
+  // 2026 ene-mar — facturas reales Octopus
+  '2026/01':1048.00,'2026/02':618.00,'2026/03':317.00,
 };
+const SEED_REAL_CONS={};
+(function(){
+  for(const [mk,tot] of Object.entries(SEED_MONTHLY_KWH)){
+    const[y,m]=mk.split('/').map(Number);
+    const dias=new Date(y,m,0).getDate();
+    const kd=+(tot/dias).toFixed(3);
+    for(let d=1;d<=dias;d++)
+      SEED_REAL_CONS[y+'/'+String(m).padStart(2,'0')+'/'+String(d).padStart(2,'0')]=kd;
+  }
+  // Mayo 2026 día a día (datos reales Datadis)
+  Object.assign(SEED_REAL_CONS,{
+    '2026/05/01':15.487,'2026/05/02':15.721,'2026/05/03':15.866,'2026/05/04':15.722,
+    '2026/05/05':15.76,'2026/05/06':15.233,'2026/05/07':12.506,'2026/05/08':12.737,
+    '2026/05/09':13.046,'2026/05/10':12.625,'2026/05/11':15.42,'2026/05/12':15.708,
+    '2026/05/13':15.599,'2026/05/14':14.886,'2026/05/15':14.844,'2026/05/16':14.211,
+    '2026/05/17':14.782,'2026/05/18':14.44,'2026/05/19':5.505,'2026/05/20':4.717,
+    '2026/05/21':4.655,'2026/05/22':4.242,'2026/05/23':23.989,'2026/05/24':18.09,
+    '2026/05/25':10.41,'2026/05/26':3.892,'2026/05/27':3.602
+  });
+})();
 // REAL_CONS empieza con los datos semilla y se enriquece con cache + llamadas a Datadis.
 let REAL_CONS = Object.assign({}, SEED_REAL_CONS);
 function dayKey(d){return d.getFullYear()+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0');}
@@ -445,6 +583,36 @@ async function fetchDatadisCurrentMonth(){
   }
 }
 
+// Sincroniza meses históricos que no tengamos en cache (sin bloquear la UI)
+// Va hacia atrás mes a mes desde el mes anterior al actual, hasta 3 años
+async function fetchDatadisHistory(){
+  const now=new Date();
+  let y=now.getFullYear(), m=now.getMonth()-1; // empieza en el mes anterior
+  if(m<0){m=11;y--;}
+  const limite=36; // máximo 36 meses hacia atrás
+  for(let i=0;i<limite;i++){
+    const mesKey=y+'/'+String(m+1).padStart(2,'0');
+    // ¿Ya tenemos datos de este mes? Comprueba si hay al menos 5 días con datos
+    const diasConDatos=Object.keys(REAL_CONS).filter(k=>k.startsWith(mesKey.replace('/','/').slice(0,7))).length;
+    if(diasConDatos<5){
+      // Espera un poco entre llamadas para no saturar Datadis
+      await new Promise(r=>setTimeout(r,1500));
+      try{
+        const resp=await fetch('/api/datadis-consumo?mes='+encodeURIComponent(mesKey),{cache:'no-store'});
+        const data=await resp.json();
+        if(data && data.ok && Array.isArray(data.consumoPorDia)){
+          for(const item of data.consumoPorDia){
+            if(item && item.dia && typeof item.kwh==='number') REAL_CONS[item.dia]=item.kwh;
+          }
+          saveCache();render();
+        }
+      }catch(e){console.warn('History fetch failed for',mesKey,e);}
+    }
+    m--;if(m<0){m=11;y--;}
+    if(y<2021||(y===2021&&m<5))break; // Datadis disponible desde junio 2021
+  }
+}
+
 // Decide si toca actualizar según la edad de los datos
 function maybeRefresh(){
   const age=Date.now()-getLastUpdate();
@@ -460,8 +628,9 @@ function manualRefresh(){
 // Inicializa al arrancar: carga cache → render → fetch en background si toca
 function initData(){
   loadCache();updateBadge();
-  // pequeño retraso para que la UI pinte primero, luego ya se actualiza
   setTimeout(()=>{maybeRefresh();},300);
+  // Histórico: arranca en background con más retraso para no interferir con la carga inicial
+  setTimeout(()=>{fetchDatadisHistory();},4000);
 }
 
 const CONS_M=[1.15,1.10,1.00,0.90,0.85,0.95,1.05,1.05,0.90,0.90,1.05,1.20];
@@ -505,22 +674,39 @@ function yearAgg(d){
   return{labels,prod,cons,exp,imp,totals:t};
 }
 
-function periodOf(hour,date){const wd=date.getDay();if(tariff.weekendValle&&(wd===0||wd===6))return 'V';return tariff.bands[hour];}
+function periodOf(hour,date){
+  const t=tariffFor(date);
+  const wd=date.getDay();
+  if(t.weekendValle&&(wd===0||wd===6))return 'V';
+  return t.bands[hour];
+}
 function computeBill(y,m,lastDay){
+  const taxes=taxesFor(y,m);
   let eByP={P:0,Ll:0,V:0},expTotal=0,impTotal=0;
-  for(let day=1;day<=lastDay;day++){const date=new Date(y,m,day),g=genDay(date);
-    for(let h=0;h<24;h++){const per=periodOf(h,date);eByP[per]+=g.imp[h]*tariff[per];expTotal+=g.exp[h];impTotal+=g.imp[h];}}
+  for(let day=1;day<=lastDay;day++){
+    const date=new Date(y,m,day);
+    const t=tariffFor(date);
+    const g=genDay(date);
+    for(let h=0;h<24;h++){
+      const per=periodOf(h,date);
+      eByP[per]+=g.imp[h]*t[per];
+      expTotal+=g.exp[h];
+      impTotal+=g.imp[h];
+    }
+  }
+  // Para potencia, cont, bono usamos la tarifa del primer día del mes
+  const tm=tariffFor(new Date(y,m,1));
   const energyGross=eByP.P+eByP.Ll+eByP.V;
-  const power=(tariff.kw1*tariff.pp1+tariff.kw2*tariff.pp2)*lastDay;
-  const contador=tariff.cont*lastDay;
-  const bono=tariff.bono*lastDay;
-  let comp=expTotal*tariff.exc;if(comp>energyGross)comp=energyGross;   // tope: no supera el término de energía
-  const energy=energyGross-comp;                                       // energía neta (excedente descontado)
-  // IEE: tipo sobre energía+potencia, con mínimo legal de 1 €/MWh sobre kWh importados
-  const iee=Math.max((tariff.iee/100)*(energy+power), 0.001*impTotal);
-  const base=energy+power+bono+contador+iee;                           // base imponible IVA
-  const iva=(tariff.iva/100)*base;
-  return{eByP,energyGross,energy,power,bono,contador,comp,iee,iva,total:base+iva,kwhExp:expTotal};
+  const power=(tm.kw1*tm.pp1+tm.kw2*tm.pp2)*lastDay;
+  const contador=tm.cont*lastDay;
+  const bono=tm.bono*lastDay;
+  let comp=expTotal*tm.exc;if(comp>energyGross)comp=energyGross;
+  const energy=energyGross-comp;
+  const ieeMin=taxes.ieeMin||0.001;
+  const iee=Math.max((taxes.iee/100)*(energy+power), ieeMin*impTotal);
+  const base=energy+power+bono+contador+iee;
+  const iva=(taxes.iva/100)*base;
+  return{eByP,energyGross,energy,power,bono,contador,comp,iee,iva,total:base+iva,kwhExp:expTotal,taxes,tm};
 }
 
 const f1=n=>n.toLocaleString('es-ES',{minimumFractionDigits:1,maximumFractionDigits:1});
@@ -536,7 +722,7 @@ function nav(dir){if(dir>0&&atLimit())return;const c=new Date(state.cursor);if(s
 function toggleSeries(s){const on=Object.values(state.series).filter(Boolean).length;if(state.series[s]&&on<=1)return;state.series[s]=!state.series[s];document.querySelector('.chip[data-s="'+s+'"]').classList.toggle('on',state.series[s]);renderInformes();}
 function toggleWeekend(){tariff.weekendValle=!tariff.weekendValle;document.getElementById('wkBtn').classList.toggle('on',tariff.weekendValle);}
 
-function render(){document.querySelectorAll('.rnd').forEach(b=>{if(b.id.endsWith('Next'))b.disabled=atLimit();});if(state.tab==='Inicio')renderInicio();else if(state.tab==='Informes')renderInformes();else if(state.tab==='Factura')renderFactura();}
+function render(){document.querySelectorAll('.rnd').forEach(b=>{if(b.id.endsWith('Next')&&b.id!=='bNext')b.disabled=atLimit();});if(state.tab==='Inicio')renderInicio();else if(state.tab==='Informes')renderInformes();else if(state.tab==='Factura')renderFactura();}
 function periodLabels(prefix){const d=state.cursor,main=document.getElementById(prefix+'Main'),sub=document.getElementById(prefix+'Sub');
   if(state.mode==='day'){main.textContent=sameDay(d,TODAY)?'Hoy':`${DIA[d.getDay()]} ${d.getDate()}`;sub.textContent=`${d.getDate()} de ${MES[d.getMonth()]} de ${d.getFullYear()}`;}
   else if(state.mode==='month'){main.textContent=`${MES[d.getMonth()]} ${d.getFullYear()}`;const cur=(d.getFullYear()===TODAY.getFullYear()&&d.getMonth()===TODAY.getMonth());sub.textContent=cur?`del 1 al ${TODAY.getDate()} (en curso)`:'mes completo';}
@@ -589,22 +775,54 @@ function renderInformes(){
   document.getElementById('rTiles').innerHTML=`<div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--cons1),var(--cons2))"></div><div class="t">Consumo de red</div><div class="v num">${fmt(t.cons)}<small>kWh</small></div></div><div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--gold1),var(--gold2))"></div><div class="t">Coste estimado</div><div class="v num">€${e2(periodCost())}</div></div>`;
 }
 function renderFactura(){
-  const y=TODAY.getFullYear(),m=TODAY.getMonth(),today=TODAY.getDate(),full=daysInMonth(y,m);
-  const cur=computeBill(y,m,today),est=computeBill(y,m,full);
+  const y=state.billYear, m=state.billMonth;
+  const isCurrent=(y===TODAY.getFullYear()&&m===TODAY.getMonth());
+  const lastDay=isCurrent?TODAY.getDate():daysInMonth(y,m);
+  const fullDays=daysInMonth(y,m);
+  const cur=computeBill(y,m,lastDay);
+  const est=isCurrent?computeBill(y,m,fullDays):null;
+
+  // Nombre comercializador
+  const firstDate=new Date(y,m,1);
+  const t=tariffFor(firstDate);
+  let comercializador='';
+  const key1=firstDate.getFullYear()+'/'+String(firstDate.getMonth()+1).padStart(2,'0')+'/01';
+  if(key1>='2026/05/20') comercializador='Total Energies';
+  else if(key1>='2025/06/01') comercializador='Octopus Solar';
+  else comercializador='Energía XXI (PVPC aprox.)';
+
+  // Navegación factura
+  const canPrev=!(y<=2021&&m===0);
+  const canNext=!(y===TODAY.getFullYear()&&m===TODAY.getMonth());
+  document.getElementById('bPrev').disabled=!canPrev;
+  document.getElementById('bNext').disabled=!canNext;
   document.getElementById('bMonthLbl').textContent=`${MES[m]} ${y}`;
+  const lbl2=document.getElementById('bMonthLbl2');if(lbl2)lbl2.textContent=`${MES[m]} ${y}`;
+  document.getElementById('bComercializador').textContent=comercializador;
   document.getElementById('bTotal').textContent=e2(cur.total);
-  document.getElementById('bEst').innerHTML=`Estimación a fin de mes: <b style="color:#fff">€${e2(est.total)}</b>`;
-  document.getElementById('bDays').textContent=`${today} de ${full} días`;
+  document.getElementById('bEst').innerHTML=isCurrent
+    ?`Estimación a fin de mes: <b style="color:#fff">€${e2(est.total)}</b>`
+    :'Mes completo';
+  document.getElementById('bDays').textContent=isCurrent?`${lastDay} de ${fullDays} días`:`${fullDays} días`;
+
+  const taxes=cur.taxes;
   document.getElementById('bBreak').innerHTML=
     line('Término de energía','consumo de red por periodos','€'+e2(cur.energyGross))+
-    line('Término de potencia',`${f1(tariff.kw1+tariff.kw2)} kW · ${today} días`,'€'+e2(cur.power))+
-    line('Compensación excedentes',`${f1(cur.kwhExp)} kWh × ${e2(tariff.exc)} €`,'−€'+e2(cur.comp),'neg')+
-    line('Bono social',`${e2(tariff.bono)} €/día`,'€'+e2(cur.bono))+
-    line('Alquiler contador',`${e2(tariff.cont)} €/día`,'€'+e2(cur.contador))+
-    line('Impuesto eléctrico',`${e2(tariff.iee)}% (mín. 1 €/MWh)`,'€'+e2(cur.iee))+
-    line('IVA',`${e2(tariff.iva)}%`,'€'+e2(cur.iva))+
-    line('Total a pagar','','€'+e2(cur.total),'tot');
+    line('Término de potencia',`${f1(cur.tm.kw1+cur.tm.kw2)} kW · ${lastDay} días`,'€'+e2(cur.power))+
+    line('Compensación excedentes',`${f1(cur.kwhExp)} kWh × ${e2(cur.tm.exc)} €`,'−€'+e2(cur.comp),'neg')+
+    line('Bono social',`${e2(cur.tm.bono)} €/día`,'€'+e2(cur.bono))+
+    line('Alquiler contador',`${e2(cur.tm.cont)} €/día`,'€'+e2(cur.contador))+
+    line('Impuesto eléctrico',`${e2(taxes.iee)}%`,'€'+e2(cur.iee))+
+    line('IVA',`${e2(taxes.iva)}%`,'€'+e2(cur.iva))+
+    line('Total estimado','','€'+e2(cur.total),'tot');
   document.getElementById('bPeriods').innerHTML=['P','Ll','V'].map(p=>`<div class="line"><span class="lk" style="display:flex;align-items:center;gap:8px"><span style="width:11px;height:11px;border-radius:3px;background:${PCOL[p]};display:inline-block"></span>${PNAME[p]}</span><span class="lv">€${e2(cur.eByP[p])}</span></div>`).join('');
+}
+function navBill(dir){
+  let y=state.billYear,m=state.billMonth;
+  m+=dir;if(m>11){m=0;y++;}else if(m<0){m=11;y--;}
+  if(y<2021||(y===2021&&m<0))return;
+  if(y>TODAY.getFullYear()||(y===TODAY.getFullYear()&&m>TODAY.getMonth()))return;
+  state.billYear=y;state.billMonth=m;renderFactura();
 }
 function line(k,s,v,cls=''){return `<div class="line ${cls}"><span class="lk">${k}${s?`<small>${s}</small>`:''}</span><span class="lv">${v}</span></div>`;}
 
