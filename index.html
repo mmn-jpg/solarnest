@@ -188,7 +188,7 @@
       <svg class="logo" viewBox="0 0 64 64"><circle cx="32" cy="32" r="12" fill="#FFB833"/><g stroke="#FFB833" stroke-width="5" stroke-linecap="round"><line x1="32" y1="6" x2="32" y2="14"/><line x1="32" y1="50" x2="32" y2="58"/><line x1="6" y1="32" x2="14" y2="32"/><line x1="50" y1="32" x2="58" y2="32"/><line x1="13" y1="13" x2="19" y2="19"/><line x1="45" y1="45" x2="51" y2="51"/><line x1="51" y1="13" x2="45" y2="19"/><line x1="19" y1="45" x2="13" y2="51"/></g></svg>
       <h1>SolarNest</h1>
     </div>
-    <div class="demo" id="syncBadge" onclick="manualRefresh()" style="cursor:pointer" title="Toca para forzar actualización">Datadis · cargando…</div>
+    <div class="demo" id="syncBadge" onmousedown="badgePressStart()" onmouseup="badgePressEnd()" onmouseleave="badgePressEnd()" ontouchstart="badgePressStart()" ontouchend="badgePressEnd()" style="cursor:pointer" title="Toca para actualizar · mantén 3s para reiniciar">Datadis · cargando…</div>
   </div>
 
   <!-- INICIO -->
@@ -487,8 +487,8 @@ const SEED_MONTHLY_KWH={
   // 2025 jun-dic — facturas reales Octopus
   '2025/06':713.13,'2025/07':471.00,'2025/08':919.00,'2025/09':327.00,
   '2025/10':494.00,'2025/11':967.00,'2025/12':1170.00,
-  // 2026 ene-mar — facturas reales Octopus
-  '2026/01':1048.00,'2026/02':618.00,'2026/03':317.00,
+  // 2026 ene-abr — facturas reales Octopus
+  '2026/01':1048.00,'2026/02':618.00,'2026/03':317.00,'2026/04':356.00,
 };
 const SEED_REAL_CONS={};
 (function(){
@@ -559,7 +559,9 @@ function updateBadge(){
 
 // Llama a nuestra función serverless para traer el mes actual
 async function fetchDatadisCurrentMonth(){
-  if(isFetching)return;isFetching=true;updateBadge();
+  if(isFetching)return;isFetching=true;
+  setLastError(''); // limpiar error anterior antes de intentar
+  updateBadge();
   try{
     const resp=await fetch('/api/datadis-consumo',{cache:'no-store'});
     const data=await resp.json();
@@ -639,8 +641,28 @@ function manualRefresh(){
   const now=Date.now();
   if(now-lastManualTap<MANUAL_COOLDOWN_MS){updateBadge();return;}
   lastManualTap=now;
+  setLastError(''); // limpiar cualquier error previo
   fetchDatadisCurrentMonth();
 }
+// Reset profundo: borra solo los datos de Datadis del localStorage y fuerza sincronización
+// Se activa manteniendo pulsado el badge 3 segundos
+function hardReset(){
+  try{
+    localStorage.removeItem(LS_DATA);
+    localStorage.removeItem(LS_TIME);
+    localStorage.removeItem(LS_ERR);
+    localStorage.removeItem(LS_HIST);
+  }catch(e){}
+  REAL_CONS=Object.assign({},SEED_REAL_CONS);
+  lastManualTap=0;
+  const el=document.getElementById('syncBadge');
+  if(el){el.textContent='Datadis · reiniciando…';}
+  render();
+  setTimeout(()=>fetchDatadisCurrentMonth(),500);
+}
+let _badgeTimer=null;
+function badgePressStart(){_badgeTimer=setTimeout(()=>{_badgeTimer=null;hardReset();},3000);}
+function badgePressEnd(){if(_badgeTimer){clearTimeout(_badgeTimer);_badgeTimer=null;manualRefresh();}}
 // Inicializa al arrancar: carga cache → render → fetch en background si toca
 function initData(){
   loadCache();updateBadge();
