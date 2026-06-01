@@ -517,7 +517,7 @@ function realConsOf(d){const k=dayKey(d);return (k in REAL_CONS)?REAL_CONS[k]:nu
 
 // ========= SISTEMA DE AUTO-ACTUALIZACIÓN DATADIS =========
 const LS_DATA='datadis_data', LS_TIME='datadis_lastUpdate', LS_ERR='datadis_lastError';
-const REFRESH_AGE_MS = 6*3600*1000;    // datos viejos si >6h
+const REFRESH_AGE_MS = 25*3600*1000;   // datos viejos si >25h (Datadis limita 1 consulta/mes/24h)
 const MANUAL_COOLDOWN_MS = 60*1000;    // tap manual: 1 min
 let isFetching=false, lastManualTap=0;
 
