@@ -177,6 +177,30 @@
     text-transform:uppercase;color:var(--mut);background:rgba(255,255,255,.08);padding:2px 6px;border-radius:6px}
   .soon-note{font-size:12px;color:var(--mut);margin:6px 0 12px}
   .chip.soon{opacity:.4;pointer-events:none}
+
+  /* Tabla de franjas P/Ll/V */
+  .franjas-chips{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+  .franja-chip{flex:1;min-width:80px;padding:10px 8px;border-radius:14px;text-align:center;border:1px solid var(--stroke)}
+  .franja-chip .fc-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;opacity:.7;margin-bottom:3px}
+  .franja-chip .fc-kwh{font-size:18px;font-weight:800}
+  .franja-chip .fc-pct{font-size:11px;opacity:.65;margin-top:1px}
+  .franja-chip.fp{background:rgba(255,69,58,.12);border-color:rgba(255,69,58,.3)}
+  .franja-chip.fll{background:rgba(255,214,10,.10);border-color:rgba(255,214,10,.25)}
+  .franja-chip.fv{background:rgba(52,199,89,.10);border-color:rgba(52,199,89,.25)}
+
+  .pvlv-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
+  .pvlv-table th{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+    color:var(--muted);padding:6px 4px;border-bottom:1px solid var(--stroke);text-align:right}
+  .pvlv-table th:first-child{text-align:left}
+  .pvlv-table td{padding:7px 4px;border-bottom:1px solid rgba(255,255,255,.05);text-align:right;
+    font-variant-numeric:tabular-nums;font-weight:600}
+  .pvlv-table td:first-child{text-align:left;color:var(--muted);font-weight:500;font-size:12px}
+  .pvlv-table tr:last-child td{border-bottom:none}
+  .pvlv-table tr.est-row td{opacity:.55;font-style:italic}
+  .pvlv-table tfoot td{border-top:1px solid var(--stroke2);padding-top:9px;font-weight:800;color:#fff;font-size:13.5px}
+  .pvlv-table tfoot td:first-child{color:var(--muted);font-weight:700}
+  .pvlv-table .cp{color:var(--pun)}.pvlv-table .cll{color:var(--lla)}.pvlv-table .cv{color:var(--val)}
+  .est-note{font-size:11px;color:var(--muted);margin-top:8px;font-style:italic;line-height:1.45}
 </style>
 </head>
 <body>
@@ -257,6 +281,28 @@
     </div>
 
     <div class="grid" id="rTiles"></div>
+
+    <!-- Tabla P/Ll/V — solo visible en modo mes -->
+    <div class="glass card" id="rFranjasCard" style="display:none;margin-top:13px">
+      <div class="ch"><h2>Por franja horaria</h2><span class="small" id="rFranjaMes">—</span></div>
+      <div class="franjas-chips" id="rFranjaChips"></div>
+      <div style="overflow-x:auto">
+        <table class="pvlv-table">
+          <thead>
+            <tr>
+              <th>Día</th>
+              <th class="cp">Punta</th>
+              <th class="cll">Llano</th>
+              <th class="cv">Valle</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody id="rFranjaBody"></tbody>
+          <tfoot id="rFranjaFoot"></tfoot>
+        </table>
+      </div>
+      <div class="est-note" id="rFranjaNote"></div>
+    </div>
   </div>
 
   <!-- FACTURA -->
@@ -811,6 +857,101 @@ function renderInformes(){
   periodLabels('r');const D=periodData();drawCompare('cInformes',D,{prod:false,cons:true,exp:false,imp:false});
   const fmt=state.mode==='day'?f1:f0,t=D.t;
   document.getElementById('rTiles').innerHTML=`<div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--cons1),var(--cons2))"></div><div class="t">Consumo de red</div><div class="v num">${fmt(t.cons)}<small>kWh</small></div></div><div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--gold1),var(--gold2))"></div><div class="t">Coste estimado</div><div class="v num">€${e2(periodCost())}</div></div>`;
+  // Tabla franjas: solo en modo mes
+  const card=document.getElementById('rFranjasCard');
+  if(state.mode==='month'){card.style.display='';renderFranjas();}
+  else{card.style.display='none';}
+}
+function renderFranjas(){
+  const y=state.cursor.getFullYear(),m=state.cursor.getMonth();
+  const cur=(y===TODAY.getFullYear()&&m===TODAY.getMonth());
+  const lastDay=cur?TODAY.getDate():daysInMonth(y,m);
+  document.getElementById('rFranjaMes').textContent=`${MES[m]} ${y}`;
+
+  // Calcular desglose P/Ll/V por día
+  // Si el día tiene datos reales horarios de Datadis usamos los reales.
+  // Si solo tenemos el total diario (semilla o Datadis sin horario), repartimos
+  // con las proporciones de la tarifa del día. Lo marcamos como estimación.
+  let rows=[], totP=0, totLl=0, totV=0, hayEst=false;
+
+  for(let d=1;d<=lastDay;d++){
+    const date=new Date(y,m,d);
+    const real=realConsOf(date);
+    if(real===null){continue;} // sin datos, no mostramos fila
+
+    const g=genDay(date); // reparte el total en 24h con shape realista
+    let p=0,ll=0,v=0;
+    for(let h=0;h<24;h++){
+      const per=periodOf(h,date);
+      if(per==='P')p+=g.imp[h];
+      else if(per==='Ll')ll+=g.imp[h];
+      else v+=g.imp[h];
+    }
+    const tot=p+ll+v;
+    // Marcamos como estimación si no tenemos datos horarios reales de Datadis
+    // (solo tenemos total diario de semilla). Heurística: si el valor viene
+    // de la semilla, todos los días del mes tienen exactamente el mismo valor.
+    // Si hay variación entre días, son datos reales horarios de Datadis.
+    const esEst=true; // siempre estimado hasta integrar horarios reales de Datadis
+    if(esEst)hayEst=true;
+
+    totP+=p;totLl+=ll;totV+=v;
+    rows.push({d,p,ll,v,tot,esEst});
+  }
+
+  const totTotal=totP+totLl+totV;
+
+  // Chips resumen
+  document.getElementById('rFranjaChips').innerHTML=`
+    <div class="franja-chip fp">
+      <div class="fc-label">Punta</div>
+      <div class="fc-kwh cp num">${f0(totP)}<span style="font-size:13px"> kWh</span></div>
+      <div class="fc-pct">${pct(totP,totTotal)}% del total</div>
+    </div>
+    <div class="franja-chip fll">
+      <div class="fc-label">Llano</div>
+      <div class="fc-kwh cll num">${f0(totLl)}<span style="font-size:13px"> kWh</span></div>
+      <div class="fc-pct">${pct(totLl,totTotal)}% del total</div>
+    </div>
+    <div class="franja-chip fv">
+      <div class="fc-label">Valle</div>
+      <div class="fc-kwh cv num">${f0(totV)}<span style="font-size:13px"> kWh</span></div>
+      <div class="fc-pct">${pct(totV,totTotal)}% del total</div>
+    </div>`;
+
+  // Filas de la tabla
+  const f1d=n=>n.toLocaleString('es-ES',{minimumFractionDigits:1,maximumFractionDigits:1});
+  document.getElementById('rFranjaBody').innerHTML=rows.map(r=>`
+    <tr class="${r.esEst?'est-row':''}">
+      <td>${String(r.d).padStart(2,'0')}/${String(m+1).padStart(2,'0')}</td>
+      <td class="cp">${f1d(r.p)}</td>
+      <td class="cll">${f1d(r.ll)}</td>
+      <td class="cv">${f1d(r.v)}</td>
+      <td>${f1d(r.tot)}</td>
+    </tr>`).join('');
+
+  // Fila de totales y promedios
+  const nRows=rows.length||1;
+  document.getElementById('rFranjaFoot').innerHTML=`
+    <tr>
+      <td>Total</td>
+      <td class="cp">${f0(totP)}</td>
+      <td class="cll">${f0(totLl)}</td>
+      <td class="cv">${f0(totV)}</td>
+      <td>${f0(totTotal)}</td>
+    </tr>
+    <tr>
+      <td style="font-weight:600;color:var(--muted);font-size:12px">Promedio/día</td>
+      <td class="cp" style="font-size:12px">${f1d(totP/nRows)}</td>
+      <td class="cll" style="font-size:12px">${f1d(totLl/nRows)}</td>
+      <td class="cv" style="font-size:12px">${f1d(totV/nRows)}</td>
+      <td style="font-size:12px">${f1d(totTotal/nRows)}</td>
+    </tr>`;
+
+  // Nota de estimación
+  document.getElementById('rFranjaNote').textContent=hayEst
+    ?'* El desglose por franja es una estimación basada en el perfil horario típico de consumo doméstico. Cuando SolarNest integre los datos horarios reales de Datadis, el desglose será exacto.'
+    :'';
 }
 function renderFactura(){
   const y=state.billYear, m=state.billMonth;
