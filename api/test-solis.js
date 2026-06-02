@@ -1,4 +1,4 @@
-// api/test-solis.js — diagnóstico de inverterDay e inverterMonth con datos reales
+// api/test-solis.js — diagnóstico resumido de producción/batería/red
 const crypto = require('crypto');
 const https  = require('https');
 
@@ -23,7 +23,7 @@ function callSolis(path, bodyObj) {
     };
     const r = https.request(options, resp => {
       let data = ''; resp.on('data', c => data += c);
-      resp.on('end', () => { try { resolve(JSON.parse(data)); } catch(e){ resolve({raw:data.slice(0,300)}); } });
+      resp.on('end', () => { try { resolve(JSON.parse(data)); } catch(e){ resolve({raw:data.slice(0,200)}); } });
     });
     r.on('error', e => resolve({ error: e.message }));
     r.write(body); r.end();
@@ -33,22 +33,39 @@ function callSolis(path, bodyObj) {
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
 
-  // Primero la lista para obtener id/sn
   const lista = await callSolis('/v1/api/inverterList', { pageNo: 1, pageSize: 10 });
   const inv = lista?.data?.page?.records?.[0];
   if (!inv) return res.status(200).json({ error: 'sin inversor', lista });
 
-  const out = { inversor: { id: inv.id, sn: inv.sn } };
+  const out = {};
 
-  // inverterDay de un día soleado pasado (ej: 30 mayo) con varios timeZone
-  out.day_tz1_30may = await callSolis('/v1/api/inverterDay', { id: inv.id, sn: inv.sn, money: 'EUR', time: '2026-05-30', timeZone: 1 });
-  out.day_tz2_30may = await callSolis('/v1/api/inverterDay', { id: inv.id, sn: inv.sn, money: 'EUR', time: '2026-05-30', timeZone: 2 });
+  // Día 30 mayo — extraer solo campos clave del punto de MÁXIMA producción
+  const day = await callSolis('/v1/api/inverterDay', { id: inv.id, sn: inv.sn, money: 'EUR', time: '2026-05-30', timeZone: 1 });
+  const puntos = day?.data || [];
+  // Buscar el punto con mayor pac (producción solar máxima del día)
+  let maxPac = null;
+  for (const p of puntos) {
+    if (maxPac === null || (parseFloat(p.pac)||0) > (parseFloat(maxPac.pac)||0)) maxPac = p;
+  }
+  out.totalPuntosDelDia = puntos.length;
+  out.puntoMaxProduccion = maxPac ? {
+    hora: maxPac.timeStr,
+    pac_solar_kw: maxPac.pac,
+    eToday_kwh: maxPac.eToday,
+    bateriaSoc: maxPac.batteryCapacitySoc,
+    bateriaPower: maxPac.batteryPower,
+    consumoCasaHoy: maxPac.homeLoadTodayEnergy,
+    vertidoHoy: maxPac.gridSellTodayEnergy,
+    compraRedHoy: maxPac.gridPurchasedTodayEnergy,
+    cargaBateriaHoy: maxPac.batteryTodayChargeEnergy,
+    descargaBateriaHoy: maxPac.batteryTodayDischargeEnergy
+  } : null;
 
-  // inverterMonth de mayo (mes completo con producción)
-  out.month_mayo = await callSolis('/v1/api/inverterMonth', { id: inv.id, sn: inv.sn, money: 'EUR', month: '2026-05' });
-
-  // inverterDetail para ver el estado actual completo
-  out.detail = await callSolis('/v1/api/inverterDetail', { id: inv.id, sn: inv.sn });
+  // inverterMonth mayo — estructura
+  const month = await callSolis('/v1/api/inverterMonth', { id: inv.id, sn: inv.sn, money: 'EUR', month: '2026-05' });
+  out.month_success = month?.success;
+  out.month_dataLength = Array.isArray(month?.data) ? month.data.length : 'no es array';
+  out.month_primerDia = Array.isArray(month?.data) && month.data[0] ? month.data[0] : month?.data;
 
   return res.status(200).json(out);
 };
