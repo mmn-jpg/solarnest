@@ -5,50 +5,49 @@
 const crypto = require('crypto');
 
 const SOLIS_API_URL = 'https://www.soliscloud.com:13333';
-const API_ID  = process.env.SOLIS_API_ID;
+const API_ID     = process.env.SOLIS_API_ID;
 const API_SECRET = process.env.SOLIS_API_SECRET;
 
-// Genera los headers de autenticación requeridos por SolisCloud
-function buildHeaders(path, body) {
-  const bodyStr = JSON.stringify(body);
+function getGMTDate() {
+  return new Date().toUTCString().replace('UTC', 'GMT');
+}
 
-  // Content-MD5: MD5 del body en Base64
-  const contentMD5 = crypto
-    .createHash('md5')
-    .update(bodyStr)
-    .digest('base64');
+function getContentMD5(body) {
+  return crypto.createHash('md5').update(body).digest('base64');
+}
 
-  const contentType = 'application/json;charset=UTF-8';
-
-  // Date en formato GMT exacto que requiere Solis
-  const date = new Date().toUTCString().replace(/GMT$/, '+0000').replace(/\+0000$/, 'GMT');
-  const gmtDate = new Date().toUTCString();
-
-  // Firma HMAC-SHA1
-  const signStr = `POST\n${contentMD5}\n${contentType}\n${gmtDate}\n${path}`;
+function getAuthorization(contentMD5, contentType, date, path) {
+  const stringToSign = `POST\n${contentMD5}\n${contentType}\n${date}\n${path}`;
   const sign = crypto
     .createHmac('sha1', API_SECRET)
-    .update(signStr)
+    .update(stringToSign)
     .digest('base64');
-
-  return {
-    'Content-Type': contentType,
-    'Content-MD5': contentMD5,
-    'Date': gmtDate,
-    'Authorization': `API ${API_ID}:${sign}`
-  };
+  return `API ${API_ID}:${sign}`;
 }
 
 async function solisPost(path, body) {
-  const headers = buildHeaders(path, body);
+  const bodyStr = JSON.stringify(body);
+  const contentType = 'application/json;charset=UTF-8';
+  const date = getGMTDate();
+  const contentMD5 = getContentMD5(bodyStr);
+  const authorization = getAuthorization(contentMD5, contentType, date, path);
+
   const res = await fetch(`${SOLIS_API_URL}${path}`, {
     method: 'POST',
-    headers,
-    body: JSON.stringify(body)
+    headers: {
+      'Content-Type': contentType,
+      'Content-MD5': contentMD5,
+      'Date': date,
+      'Authorization': authorization
+    },
+    body: bodyStr
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.msg || 'Solis API error');
+
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+  
+  const json = JSON.parse(text);
+  if (!json.success) throw new Error(`Solis error: ${json.msg || JSON.stringify(json)}`);
   return json.data;
 }
 
@@ -58,80 +57,71 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   if (!API_ID || !API_SECRET) {
-    return res.status(500).json({ ok: false, error: 'Variables de entorno SOLIS_API_ID / SOLIS_API_SECRET no configuradas' });
+    return res.status(500).json({ ok: false, error: 'Variables SOLIS_API_ID / SOLIS_API_SECRET no configuradas' });
   }
 
   try {
-    const { tipo = 'hoy', fecha } = req.query;
-    // tipo: 'hoy' → producción del día actual
-    //       'mes' → producción diaria del mes indicado (YYYY/MM)
-    //       'lista' → lista de inversores (para obtener el ID)
+    const { tipo = 'lista', fecha } = req.query;
 
     if (tipo === 'lista') {
-      // Paso 1: obtener lista de inversores para conocer el ID
       const data = await solisPost('/v1/api/inverterList', { pageNo: '1', pageSize: '10' });
       const inversores = (data.page?.records || []).map(inv => ({
         id: inv.id,
         sn: inv.sn,
         nombre: inv.collectorName || inv.sn,
-        potencia: inv.power,
-        estado: inv.state
+        potenciaInstalada: inv.power,
+        estado: inv.state,
+        energiaHoy: inv.eToday,
+        energiaTotal: inv.eTotal
       }));
       return res.status(200).json({ ok: true, inversores });
     }
 
-    // Para 'hoy' y 'mes' necesitamos el ID del inversor
-    // Primero lo obtenemos automáticamente
+    // Para hoy/mes: obtener el primer inversor
     const listaData = await solisPost('/v1/api/inverterList', { pageNo: '1', pageSize: '10' });
     const records = listaData.page?.records || [];
     if (records.length === 0) {
-      return res.status(200).json({ ok: false, error: 'No se encontraron inversores en la cuenta' });
+      return res.status(200).json({ ok: false, error: 'No se encontraron inversores' });
     }
-    const inversor = records[0]; // tomamos el primero (Miguel tiene 1 inversor)
-    const inverterId = inversor.id;
-    const inverterSn = inversor.sn;
+    const inv = records[0];
 
     if (tipo === 'hoy') {
-      // Producción horaria del día actual
-      const hoy = fecha || new Date().toISOString().slice(0, 10).replace(/-/g, '-');
-      const [y, m, d] = hoy.split('-');
+      const hoy = fecha || new Date().toISOString().slice(0, 10);
       const data = await solisPost('/v1/api/inverterDay', {
-        inverterId,
-        sn: inverterSn,
+        id: inv.id,
+        sn: inv.sn,
         money: 'EUR',
-        time: `${y}-${m}-${d}`,
-        timeZone: '2' // Europa Central (CET = UTC+1, CEST = UTC+2)
+        time: hoy,
+        timeZone: '2'
       });
-      // Devolvemos los puntos de energía cada 5min
       return res.status(200).json({
         ok: true,
         tipo: 'hoy',
-        fecha: `${y}-${m}-${d}`,
-        inverterSn,
-        energia_hoy_kwh: parseFloat(inversor.eToday) || 0,
-        potencia_actual_kw: parseFloat(inversor.power) || 0,
+        fecha: hoy,
+        sn: inv.sn,
+        energiaHoy_kwh: parseFloat(inv.eToday) || 0,
+        potenciaActual_kw: parseFloat(inv.power) || 0,
         puntos: (data.records || []).map(p => ({
-          hora: p.dataTimestamp,
-          potencia_kw: parseFloat(p.pac) || 0,
-          energia_acum_kwh: parseFloat(p.eToday) || 0
+          ts: p.dataTimestamp,
+          pac_kw: parseFloat(p.pac) || 0,
+          eHoy_kwh: parseFloat(p.eToday) || 0
         }))
       });
     }
 
     if (tipo === 'mes') {
-      // Producción diaria del mes indicado (YYYY-MM)
-      const mes = fecha || new Date().toISOString().slice(0, 7); // '2026-06'
+      const mes = fecha || new Date().toISOString().slice(0, 7);
       const data = await solisPost('/v1/api/inverterMonth', {
-        inverterId,
-        sn: inverterSn,
+        id: inv.id,
+        sn: inv.sn,
         money: 'EUR',
-        month: mes // formato YYYY-MM
+        month: mes
       });
       return res.status(200).json({
         ok: true,
         tipo: 'mes',
         mes,
-        inverterSn,
+        sn: inv.sn,
         dias: (data.records || []).map(d => ({
           fecha: d.date,
           energia_kwh: parseFloat(d.energy) || 0
