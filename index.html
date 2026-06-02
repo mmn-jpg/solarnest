@@ -201,6 +201,41 @@
   .pvlv-table tfoot td:first-child{color:var(--muted);font-weight:700}
   .pvlv-table .cp{color:var(--pun)}.pvlv-table .cll{color:var(--lla)}.pvlv-table .cv{color:var(--val)}
   .est-note{font-size:11px;color:var(--muted);margin-top:8px;font-style:italic;line-height:1.45}
+
+  /* Balance energético — diagrama de flujo */
+  .bal-frases{margin-bottom:16px}
+  .bal-frase{display:flex;align-items:flex-start;gap:9px;font-size:14px;line-height:1.5;
+    color:var(--txt);margin-bottom:9px}
+  .bal-frase:last-child{margin-bottom:0}
+  .bal-frase .bf-ic{flex:none;width:22px;height:22px;border-radius:7px;display:flex;align-items:center;
+    justify-content:center;font-size:13px;margin-top:1px}
+  .bal-frase b{font-weight:800}
+  .bal-frase .bf-sun{background:rgba(255,159,10,.18)}
+  .bal-frase .bf-self{background:rgba(52,209,88,.18)}
+
+  .bal-flow{display:flex;flex-direction:column;align-items:center;gap:0;margin:6px 0 4px}
+  .bal-node{display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 18px;
+    border-radius:16px;border:1px solid var(--stroke);min-width:120px;background:rgba(255,255,255,.03)}
+  .bal-node .bn-ic{font-size:26px;line-height:1}
+  .bal-node .bn-label{font-size:12px;color:var(--muted);font-weight:600}
+  .bal-node .bn-val{font-size:19px;font-weight:800;font-variant-numeric:tabular-nums}
+  .bal-node.sun{border-color:rgba(255,159,10,.35);background:rgba(255,159,10,.07)}
+  .bal-node.sun .bn-val{color:var(--prod2)}
+  .bal-node.home{border-color:rgba(10,132,255,.35);background:rgba(10,132,255,.07)}
+  .bal-node.home .bn-val{color:var(--cons2)}
+
+  .bal-arrows{display:flex;justify-content:center;gap:40px;width:100%;margin:2px 0}
+  .bal-arrow{display:flex;flex-direction:column;align-items:center;gap:1px;font-size:11px;color:var(--muted)}
+  .bal-arrow .ba-amt{font-weight:700;font-size:12.5px}
+  .bal-arrow svg{width:18px;height:24px}
+  .bal-row3{display:flex;justify-content:center;gap:14px;width:100%;flex-wrap:wrap}
+  .bal-row3 .bal-node{flex:1;min-width:96px}
+  .bal-node.bat{border-color:rgba(124,255,168,.30);background:rgba(52,209,88,.05)}
+  .bal-node.grid-in{border-color:rgba(255,107,107,.30);background:rgba(255,107,107,.06)}
+  .bal-node.grid-in .bn-val{color:var(--imp2)}
+  .bal-node.grid-out{border-color:rgba(52,209,88,.30);background:rgba(52,209,88,.06)}
+  .bal-node.grid-out .bn-val{color:var(--exp2)}
+  .bal-conn{color:var(--muted2);margin:1px 0}
 </style>
 </head>
 <body>
@@ -302,6 +337,13 @@
         </table>
       </div>
       <div class="est-note" id="rFranjaNote"></div>
+    </div>
+
+    <!-- Balance energético solar (Solis) -->
+    <div class="glass card" id="rBalanceCard" style="display:none;margin-top:13px">
+      <div class="ch"><h2>Balance energético</h2><span class="small" id="rBalMes">—</span></div>
+      <div class="bal-frases" id="rBalFrases"></div>
+      <div class="bal-flow" id="rBalFlow"></div>
     </div>
   </div>
 
@@ -562,21 +604,28 @@ function dayKey(d){return d.getFullYear()+'/'+String(d.getMonth()+1).padStart(2,
 function realConsOf(d){const k=dayKey(d);return (k in REAL_CONS)?REAL_CONS[k]:null;}
 
 // ========= DATOS SOLIS (producción solar + vertido a red) =========
-// SOLAR_PROD[clave] = kWh producidos ese día; SOLAR_EXP[clave] = kWh vertidos a red.
+// Almacenes por día (clave Y/M/D):
+//   SOLAR_PROD = producción solar | SOLAR_EXP = vertido a red
+//   SOLAR_CONS = consumo casa | SOLAR_IMP = compra de red | SOLAR_SELF = autoconsumo
 // Se rellenan desde /api/solis-produccion y se cachean en localStorage.
 let SOLAR_PROD = {};
 let SOLAR_EXP  = {};
+let SOLAR_CONS = {};
+let SOLAR_IMP  = {};
+let SOLAR_SELF = {};
 function prodOf(d){const k=dayKey(d);return (k in SOLAR_PROD)?SOLAR_PROD[k]:null;}
 function expOf(d){const k=dayKey(d);return (k in SOLAR_EXP)?SOLAR_EXP[k]:null;}
 const LS_SOLIS='solis_data', LS_SOLIS_TIME='solis_lastUpdate';
 function loadSolisCache(){
   try{
     const raw=localStorage.getItem(LS_SOLIS);
-    if(raw){const o=JSON.parse(raw);if(o&&o.prod)SOLAR_PROD=o.prod;if(o&&o.exp)SOLAR_EXP=o.exp;}
+    if(raw){const o=JSON.parse(raw);
+      if(o&&o.prod)SOLAR_PROD=o.prod;if(o&&o.exp)SOLAR_EXP=o.exp;
+      if(o&&o.cons)SOLAR_CONS=o.cons;if(o&&o.imp)SOLAR_IMP=o.imp;if(o&&o.self)SOLAR_SELF=o.self;}
   }catch(e){}
 }
 function saveSolisCache(){
-  try{localStorage.setItem(LS_SOLIS,JSON.stringify({prod:SOLAR_PROD,exp:SOLAR_EXP}));}catch(e){}
+  try{localStorage.setItem(LS_SOLIS,JSON.stringify({prod:SOLAR_PROD,exp:SOLAR_EXP,cons:SOLAR_CONS,imp:SOLAR_IMP,self:SOLAR_SELF}));}catch(e){}
 }
 function getSolisLastUpdate(){const t=parseInt(localStorage.getItem(LS_SOLIS_TIME)||'0',10);return isNaN(t)?0:t;}
 function setSolisLastUpdate(t){try{localStorage.setItem(LS_SOLIS_TIME,String(t));}catch(e){}}
@@ -613,6 +662,9 @@ async function fetchSolisCurrentMonth(){
         const k=dayKey(dt);
         if(typeof dia.produccion_kwh==='number')SOLAR_PROD[k]=dia.produccion_kwh;
         if(typeof dia.vertido_kwh==='number')SOLAR_EXP[k]=dia.vertido_kwh;
+        if(typeof dia.consumo_kwh==='number')SOLAR_CONS[k]=dia.consumo_kwh;
+        if(typeof dia.compra_kwh==='number')SOLAR_IMP[k]=dia.compra_kwh;
+        if(typeof dia.autoconsumo_kwh==='number')SOLAR_SELF[k]=dia.autoconsumo_kwh;
       }
       saveSolisCache();setSolisLastUpdate(Date.now());
       render();
@@ -931,6 +983,64 @@ function renderInformes(){
   const card=document.getElementById('rFranjasCard');
   if(state.mode==='month'){card.style.display='';renderFranjas();}
   else{card.style.display='none';}
+  renderBalance();
+}
+// Balance energético: muestra el flujo solar→casa→red→batería del periodo activo
+function renderBalance(){
+  const card=document.getElementById('rBalanceCard');
+  const prod=periodSolar(SOLAR_PROD), cons=periodSolar(SOLAR_CONS),
+        exp=periodSolar(SOLAR_EXP), imp=periodSolar(SOLAR_IMP),
+        self=periodSolar(SOLAR_SELF);
+  // Si no hay datos de producción para el periodo, ocultamos la tarjeta
+  if(prod==null){card.style.display='none';return;}
+  card.style.display='';
+  const f=state.mode==='day'?f1:f0;
+  const mainLbl=document.getElementById('rMain');
+  document.getElementById('rBalMes').textContent=mainLbl?mainLbl.textContent:'';
+
+  // Cálculos para las frases en lenguaje natural
+  const consVal=cons||0, selfVal=self||0, prodVal=prod||0;
+  // Autosuficiencia: % del consumo cubierto por lo solar (autoconsumo / consumo)
+  const autosuf = consVal>0 ? Math.round(selfVal/consVal*100) : 0;
+  // Aprovechamiento: % de lo producido que se usó en casa (autoconsumo / producción)
+  const aprov = prodVal>0 ? Math.round(selfVal/prodVal*100) : 0;
+
+  document.getElementById('rBalFrases').innerHTML=`
+    <div class="bal-frase">
+      <span class="bf-ic bf-sun">☀️</span>
+      <div>De cada 100 kWh que consumes, <b>${autosuf}</b> vienen de tus paneles y <b>${100-autosuf}</b> de la red.</div>
+    </div>
+    <div class="bal-frase">
+      <span class="bf-ic bf-self">🔋</span>
+      <div>Has aprovechado el <b>${aprov}%</b> de la energía que produjiste; el resto se vertió a la red.</div>
+    </div>`;
+
+  // Diagrama de flujo: Sol → Casa, con Batería / Red entrada / Red salida
+  document.getElementById('rBalFlow').innerHTML=`
+    <div class="bal-node sun">
+      <div class="bn-ic">☀️</div>
+      <div class="bn-label">Producción solar</div>
+      <div class="bn-val">${f(prodVal)} kWh</div>
+    </div>
+    <div class="bal-conn">↓</div>
+    <div class="bal-node home">
+      <div class="bn-ic">🏠</div>
+      <div class="bn-label">Consumo de tu casa</div>
+      <div class="bn-val">${f(consVal)} kWh</div>
+    </div>
+    <div class="bal-conn">↓</div>
+    <div class="bal-row3">
+      <div class="bal-node grid-out">
+        <div class="bn-ic">⚡</div>
+        <div class="bn-label">Vertido a red</div>
+        <div class="bn-val">${f(exp||0)} kWh</div>
+      </div>
+      <div class="bal-node grid-in">
+        <div class="bn-ic">🔌</div>
+        <div class="bn-label">Compra a red</div>
+        <div class="bn-val">${f(imp||0)} kWh</div>
+      </div>
+    </div>`;
 }
 function renderFranjas(){
   const y=state.cursor.getFullYear(),m=state.cursor.getMonth();
