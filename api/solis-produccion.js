@@ -114,11 +114,19 @@ module.exports = async (req, res) => {
       const data = await solisRequest('/v1/api/inverterMonth', {
         id: inv.id, sn: inv.sn, money: 'EUR', month: mes
       });
+      // La respuesta de inverterMonth viene como array directo en `data`
+      // (no en data.records). Cada elemento es un día con produceEnergy,
+      // gridSellEnergy, gridPurchasedEnergy, consumeEnergy, etc.
+      const arr = Array.isArray(data) ? data : (data.records || []);
       return res.status(200).json({
         ok: true, tipo: 'mes', mes, sn: inv.sn,
-        dias: (data.records || []).map(d => ({
-          fecha: d.date,
-          energia_kwh: parseFloat(d.energy) || 0
+        dias: arr.map(d => ({
+          fecha: d.dateStr || d.date,
+          produccion_kwh: parseFloat(d.produceEnergy) || 0,
+          vertido_kwh: parseFloat(d.gridSellEnergy) || 0,
+          compra_kwh: parseFloat(d.gridPurchasedEnergy) || 0,
+          consumo_kwh: parseFloat(d.consumeEnergy) || 0,
+          autoconsumo_kwh: parseFloat(d.oneSelf) || 0
         }))
       });
     }
