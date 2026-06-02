@@ -240,8 +240,8 @@
     <div class="grid">
       <div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--gold1),var(--gold2))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0M12 7v5l3 2"/></svg></div><div class="t">Coste estimado</div><div class="v num">€<span id="iCost">0</span></div></div>
       <div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--imp1),var(--imp2))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 13h2l2-7 4 14 3-9 2 5h5"/></svg></div><div class="t" id="iAvgLbl">Media diaria</div><div class="v num"><span id="iAvg">0</span><small>kWh</small></div></div>
-      <div class="glass stat soon"><div class="ic" style="background:linear-gradient(135deg,var(--prod1),var(--prod2))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/></svg></div><div class="t">Producción solar</div><div class="v num soon-v">—</div><div class="soon-tag">próximamente</div></div>
-      <div class="glass stat soon"><div class="ic" style="background:linear-gradient(135deg,var(--exp1),var(--exp2))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></div><div class="t">Vertido a red</div><div class="v num soon-v">—</div><div class="soon-tag">próximamente</div></div>
+      <div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--prod1),var(--prod2))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/></svg></div><div class="t">Producción solar</div><div class="v num"><span id="iProd">—</span><small id="iProdU"></small></div></div>
+      <div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--exp1),var(--exp2))"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></div><div class="t">Vertido a red</div><div class="v num"><span id="iExp">—</span><small id="iExpU"></small></div></div>
     </div>
 
     <div class="glass card">
@@ -561,6 +561,66 @@ let REAL_CONS = Object.assign({}, SEED_REAL_CONS);
 function dayKey(d){return d.getFullYear()+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0');}
 function realConsOf(d){const k=dayKey(d);return (k in REAL_CONS)?REAL_CONS[k]:null;}
 
+// ========= DATOS SOLIS (producción solar + vertido a red) =========
+// SOLAR_PROD[clave] = kWh producidos ese día; SOLAR_EXP[clave] = kWh vertidos a red.
+// Se rellenan desde /api/solis-produccion y se cachean en localStorage.
+let SOLAR_PROD = {};
+let SOLAR_EXP  = {};
+function prodOf(d){const k=dayKey(d);return (k in SOLAR_PROD)?SOLAR_PROD[k]:null;}
+function expOf(d){const k=dayKey(d);return (k in SOLAR_EXP)?SOLAR_EXP[k]:null;}
+const LS_SOLIS='solis_data', LS_SOLIS_TIME='solis_lastUpdate';
+function loadSolisCache(){
+  try{
+    const raw=localStorage.getItem(LS_SOLIS);
+    if(raw){const o=JSON.parse(raw);if(o&&o.prod)SOLAR_PROD=o.prod;if(o&&o.exp)SOLAR_EXP=o.exp;}
+  }catch(e){}
+}
+function saveSolisCache(){
+  try{localStorage.setItem(LS_SOLIS,JSON.stringify({prod:SOLAR_PROD,exp:SOLAR_EXP}));}catch(e){}
+}
+function getSolisLastUpdate(){const t=parseInt(localStorage.getItem(LS_SOLIS_TIME)||'0',10);return isNaN(t)?0:t;}
+function setSolisLastUpdate(t){try{localStorage.setItem(LS_SOLIS_TIME,String(t));}catch(e){}}
+
+// Suma producción/vertido en el periodo activo (día/mes/año)
+function periodSolar(store){
+  const d=state.cursor;
+  if(state.mode==='day'){const v=store[dayKey(d)];return (v==null)?null:v;}
+  if(state.mode==='month'){
+    const y=d.getFullYear(),m=d.getMonth(),cur=(y===TODAY.getFullYear()&&m===TODAY.getMonth());
+    const last=cur?TODAY.getDate():daysInMonth(y,m);let sum=0,hay=false;
+    for(let i=1;i<=last;i++){const v=store[dayKey(new Date(y,m,i))];if(v!=null){sum+=v;hay=true;}}
+    return hay?sum:null;
+  }
+  const y=d.getFullYear(),cur=(y===TODAY.getFullYear()),lastM=cur?TODAY.getMonth():11;let sum=0,hay=false;
+  for(let mi=0;mi<=lastM;mi++){const lastD=(cur&&mi===TODAY.getMonth())?TODAY.getDate():daysInMonth(y,mi);
+    for(let di=1;di<=lastD;di++){const v=store[dayKey(new Date(y,mi,di))];if(v!=null){sum+=v;hay=true;}}}
+  return hay?sum:null;
+}
+
+// Pide a Solis los datos del mes actual (día a día) y los guarda
+async function fetchSolisCurrentMonth(){
+  try{
+    const mesKey=`${TODAY.getFullYear()}-${String(TODAY.getMonth()+1).padStart(2,'0')}`;
+    const resp=await fetch('/api/solis-produccion?tipo=mes&fecha='+mesKey,{cache:'no-store'});
+    const json=await resp.json();
+    if(json.ok && Array.isArray(json.dias)){
+      for(const dia of json.dias){
+        if(!dia.fecha)continue;
+        // dia.fecha viene como timestamp o 'YYYY-MM-DD'; normalizamos a clave Y/M/D
+        let dt;
+        if(/^\d+$/.test(String(dia.fecha)))dt=new Date(parseInt(dia.fecha,10));
+        else dt=new Date(dia.fecha);
+        const k=dayKey(dt);
+        if(typeof dia.produccion_kwh==='number')SOLAR_PROD[k]=dia.produccion_kwh;
+        if(typeof dia.vertido_kwh==='number')SOLAR_EXP[k]=dia.vertido_kwh;
+      }
+      saveSolisCache();setSolisLastUpdate(Date.now());
+      render();
+    }
+  }catch(e){console.warn('Solis fetch failed',e);}
+}
+
+
 // ========= SISTEMA DE AUTO-ACTUALIZACIÓN DATADIS =========
 const LS_DATA='datadis_data', LS_TIME='datadis_lastUpdate', LS_ERR='datadis_lastError';
 const REFRESH_AGE_MS = 25*3600*1000;   // datos viejos si >25h (Datadis limita 1 consulta/mes/24h)
@@ -711,8 +771,12 @@ function badgePressStart(){_badgeTimer=setTimeout(()=>{_badgeTimer=null;hardRese
 function badgePressEnd(){if(_badgeTimer){clearTimeout(_badgeTimer);_badgeTimer=null;manualRefresh();}}
 // Inicializa al arrancar: carga cache → render → fetch en background si toca
 function initData(){
-  loadCache();updateBadge();
+  loadCache();loadSolisCache();updateBadge();
   setTimeout(()=>{maybeRefresh();},300);
+  // Solis: refresca producción/vertido del mes actual si los datos tienen más de 25h
+  setTimeout(()=>{
+    if(Date.now()-getSolisLastUpdate()>REFRESH_AGE_MS)fetchSolisCurrentMonth();
+  },2000);
   // Histórico: arranca en background con más retraso para no interferir con la carga inicial
   setTimeout(()=>{fetchDatadisHistory();},4000);
 }
@@ -844,6 +908,12 @@ function renderInicio(){
   document.getElementById('iCost').textContent=e2(periodCost());
   document.getElementById('iAvg').textContent=f1(avg);
   const lblEl=document.getElementById('iAvgLbl');if(lblEl)lblEl.textContent=lblAvg;
+  // Tarjetas Solis: producción solar y vertido a red
+  const prodV=periodSolar(SOLAR_PROD), expV=periodSolar(SOLAR_EXP);
+  const pe=document.getElementById('iProd'),peu=document.getElementById('iProdU');
+  const xe=document.getElementById('iExp'),xeu=document.getElementById('iExpU');
+  if(pe){if(prodV==null){pe.textContent='—';peu.textContent='';}else{pe.textContent=fmt(prodV);peu.textContent='kWh';}}
+  if(xe){if(expV==null){xe.textContent='—';xeu.textContent='';}else{xe.textContent=fmt(expV);xeu.textContent='kWh';}}
   drawCompare('cInicio',D,{prod:false,cons:true,exp:false,imp:false});
 }
 function periodCost(){
