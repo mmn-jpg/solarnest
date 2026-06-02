@@ -16,19 +16,20 @@ function getContentMD5(body) {
   return crypto.createHash('md5').update(body).digest('base64');
 }
 
-function getSign(contentMD5, contentType, date, path) {
-  const str = `POST\n${contentMD5}\n${contentType}\n${date}\n${path}`;
+function getSign(contentMD5, contentTypeForSign, date, path) {
+  const str = `POST\n${contentMD5}\n${contentTypeForSign}\n${date}\n${path}`;
   return crypto.createHmac('sha1', API_SECRET).update(str).digest('base64');
 }
 
 // Llamada HTTPS nativa (evita problemas de fetch con puerto no estándar)
 function solisRequest(path, body) {
   return new Promise((resolve, reject) => {
-    const bodyStr     = JSON.stringify(body);
-    const contentType = 'application/json;charset=UTF-8';
-    const date        = getGMTDate();
-    const contentMD5  = getContentMD5(bodyStr);
-    const sign        = getSign(contentMD5, contentType, date, path);
+    const bodyStr        = JSON.stringify(body);
+    const contentType    = 'application/json;charset=UTF-8';  // header
+    const contentTypeSign = 'application/json';                // firma (SIN charset)
+    const date           = getGMTDate();
+    const contentMD5     = getContentMD5(bodyStr);
+    const sign           = getSign(contentMD5, contentTypeSign, date, path);
 
     const options = {
       hostname: SOLIS_HOST,
