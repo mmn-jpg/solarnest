@@ -7,13 +7,9 @@ const SOLIS_PORT   = 13333;
 const API_ID       = process.env.SOLIS_API_ID;
 const API_SECRET   = process.env.SOLIS_API_SECRET;
 
-// Formato GMT exacto que acepta Solis: "EEE, d MMM yyyy HH:mm:ss GMT" (sin cero en el día)
+// Formato GMT estándar (RFC 1123) que acepta Solis
 function getGMTDate() {
-  const d = new Date();
-  const DAYS   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const p = n => String(n).padStart(2,'0');
-  return `${DAYS[d.getUTCDay()]}, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} GMT`;
+  return new Date().toUTCString();
 }
 
 function getContentMD5(body) {
@@ -79,7 +75,7 @@ module.exports = async (req, res) => {
     const { tipo = 'lista', fecha } = req.query;
 
     if (tipo === 'lista') {
-      const data = await solisRequest('/v1/api/inverterList', { pageNo: '1', pageSize: '10' });
+      const data = await solisRequest('/v1/api/inverterList', { pageNo: 1, pageSize: 10 });
       const inversores = (data.page?.records || []).map(inv => ({
         id: inv.id, sn: inv.sn,
         potenciaInstalada: inv.power,
@@ -91,7 +87,7 @@ module.exports = async (req, res) => {
     }
 
     // Obtener inversor para hoy/mes
-    const listaData = await solisRequest('/v1/api/inverterList', { pageNo: '1', pageSize: '10' });
+    const listaData = await solisRequest('/v1/api/inverterList', { pageNo: 1, pageSize: 10 });
     const inv = (listaData.page?.records || [])[0];
     if (!inv) return res.status(200).json({ ok: false, error: 'No se encontraron inversores' });
 
