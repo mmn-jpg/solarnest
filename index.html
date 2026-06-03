@@ -419,7 +419,7 @@
       </div>
       <div class="fld" style="margin-top:11px"><label>Alquiler del contador</label><div class="inp"><input id="tCont" type="number" step="0.001" inputmode="decimal"><span class="u">€/día</span></div></div>
       <div class="fld"><label>Bono social</label><div class="inp"><input id="tBono" type="number" step="0.001" inputmode="decimal"><span class="u">€/día</span></div></div>
-      <div class="note">Los precios de <b>energía</b> y <b>potencia</b> se introducen <b>sin impuestos</b>. El IVA y el Impuesto Eléctrico (IEE) se aplican en el cálculo de la factura según los porcentajes indicados aquí. Por defecto, rebaja vigente hasta 30/06/2026: <b>IVA 10%</b> e <b>IEE 0,5%</b>. Desde el 1/07/2026 está previsto que vuelvan a 21% y 5,11%. Ajústalo cuando cambie.</div>
+      <div class="note">Los precios de <b>energía</b> y <b>potencia</b> se introducen <b>sin impuestos</b>. El IVA y el Impuesto Eléctrico (IEE) se aplican en el cálculo de la factura según los porcentajes indicados aquí. La rebaja temporal (IVA 10%, IEE 0,5%) estuvo vigente hasta el 31/05/2026. Desde el <b>1/06/2026</b> han vuelto a sus tipos normales: <b>IVA 21%</b> e <b>IEE 5,11%</b>.</div>
     </div>
 
     <button class="save" onclick="saveTariff()">Guardar tarifa</button>
@@ -518,7 +518,9 @@ function tariffFor(date){
 // =====================================================================
 function taxesFor(year, month){ // month 0-based
   const ym = year*100 + (month+1);
-  // Desde RDL 7/2026 (marzo 2026): IEE reducido al 0,5% (mín 1€/MWh), IVA 10%
+  // Desde 1 jun 2026: fin de la rebaja. IVA vuelve al 21%, IEE al 5,11% (mín 1€/MWh)
+  if(ym >= 202606) return {iva:21, iee:5.1126963, ieeMin:0.001};
+  // RDL 7/2026: rebaja temporal mar–may 2026: IVA 10%, IEE 0,5% (mín 1€/MWh)
   if(ym >= 202603) return {iva:10, iee:0.5, ieeMin:0.001};
   // Ene-Feb 2026: IEE 5,11%, IVA 21%
   if(ym >= 202601) return {iva:21, iee:5.1126963, ieeMin:0.001};
@@ -542,7 +544,7 @@ let tariff={
   bands:['V','V','V','V','V','V','V','V','Ll','Ll','P','P','P','P','Ll','Ll','Ll','Ll','P','P','P','P','Ll','Ll'],
   weekendValle:true, exc:0.07,
   kw1:5.5, kw2:5.5, pp1:0.081479, pp2:0.081479,
-  iva:10, iee:0.5, cont:0.026630, bono:0.019
+  iva:21, iee:5.1126963, cont:0.026630, bono:0.019
 };
 const PCOL={P:'var(--pun)',Ll:'var(--lla)',V:'var(--val)'};
 const PHEX={P:'#FF453A',Ll:'#FFD60A',V:'#34C759'};
