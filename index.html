@@ -284,11 +284,11 @@
       <div class="chart-box"><canvas id="cInicio"></canvas></div>
     </div>
 
-    <div class="glass card soon">
+    <div class="glass card" id="iAprovCard" style="display:none">
       <h2 style="font-size:16px;font-weight:700">Aprovechamiento solar</h2>
-      <div class="soon-note">Disponible al conectar el inversor solar (Solis).</div>
-      <div class="meter"><div class="r"><b>Autosuficiencia</b><span class="p num">—</span></div><div class="track"><div class="fill" style="width:0%"></div></div></div>
-      <div class="meter"><div class="r"><b>Autoconsumo solar</b><span class="p num">—</span></div><div class="track"><div class="fill" style="width:0%"></div></div></div>
+      <div class="soon-note" id="iAprovSub">Cuánto aprovechas tu instalación.</div>
+      <div class="meter"><div class="r"><b>Autosuficiencia</b><span class="p num" id="iAutosuf">—</span></div><div class="track"><div class="fill" id="iAutosufBar" style="width:0%"></div></div></div>
+      <div class="meter"><div class="r"><b>Autoconsumo solar</b><span class="p num" id="iAprov">—</span></div><div class="track"><div class="fill" id="iAprovBar" style="width:0%"></div></div></div>
     </div>
   </div>
 
@@ -966,6 +966,24 @@ function renderInicio(){
   const xe=document.getElementById('iExp'),xeu=document.getElementById('iExpU');
   if(pe){if(prodV==null){pe.textContent='—';peu.textContent='';}else{pe.textContent=fmt(prodV);peu.textContent='kWh';}}
   if(xe){if(expV==null){xe.textContent='—';xeu.textContent='';}else{xe.textContent=fmt(expV);xeu.textContent='kWh';}}
+  // Tarjeta Aprovechamiento solar (autosuficiencia + autoconsumo)
+  const aprovCard=document.getElementById('iAprovCard');
+  const consV=periodSolar(SOLAR_CONS), selfV=periodSolar(SOLAR_SELF);
+  if(aprovCard){
+    if(prodV==null){aprovCard.style.display='none';}
+    else{
+      aprovCard.style.display='';
+      const cV=consV||0, sV=selfV||0, pV=prodV||0;
+      const autosuf=cV>0?Math.round(sV/cV*100):0;   // % consumo cubierto por solar
+      const aprov=pV>0?Math.round(sV/pV*100):0;       // % producción aprovechada
+      const setMeter=(idVal,idBar,pct)=>{
+        const v=document.getElementById(idVal),b=document.getElementById(idBar);
+        if(v)v.textContent=pct+'%';if(b)b.style.width=Math.min(100,pct)+'%';
+      };
+      setMeter('iAutosuf','iAutosufBar',autosuf);
+      setMeter('iAprov','iAprovBar',aprov);
+    }
+  }
   drawCompare('cInicio',D,{prod:false,cons:true,exp:false,imp:false});
 }
 function periodCost(){
