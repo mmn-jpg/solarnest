@@ -736,6 +736,19 @@ function setLastUpdate(t){try{localStorage.setItem(LS_TIME,String(t));}catch(e){
 function getLastError(){return localStorage.getItem(LS_ERR)||'';}
 function setLastError(s){try{s?localStorage.setItem(LS_ERR,s):localStorage.removeItem(LS_ERR);}catch(e){}}
 
+// Registro del último INTENTO a Datadis (independiente de si tuvo éxito).
+// Guarda: hora del intento, mes consultado y resultado (ok / 429 / error).
+const LS_TRY='datadis_lastTry';
+function setLastTry(info){try{localStorage.setItem(LS_TRY,JSON.stringify({...info,ts:Date.now()}));}catch(e){}}
+function getLastTry(){try{const r=localStorage.getItem(LS_TRY);return r?JSON.parse(r):null;}catch(e){return null;}}
+// Formatea fecha/hora local legible
+function fmtDateTime(ms){
+  if(!ms)return '—';
+  const d=new Date(ms);
+  const p=n=>String(n).padStart(2,'0');
+  return `${p(d.getDate())}/${p(d.getMonth()+1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 // Texto humano para "hace cuánto tiempo"
 function timeAgo(ms){
   if(!ms)return 'sin sincronizar';
@@ -762,17 +775,36 @@ async function fetchDatadisCurrentMonth(){
   setLastError(''); // limpiar error anterior antes de intentar
   updateBadge();
   try{
-    // Datadis publica el consumo con 1-2 días de retraso, así que el mes en
-    // curso suele estar vacío a principios de mes. Elegimos el mes objetivo:
-    // si estamos en los primeros 3 días del mes, pedimos el mes ANTERIOR
-    // (que ya está completo); si no, el mes actual.
+    // Elegimos QUÉ mes pedir de forma inteligente: el mes más reciente que aún
+    // no tengamos "completo" en caché. Esto evita gastar la única consulta diaria
+    // de Datadis en el mes en curso (que apenas tiene datos y suele dar 429 al
+    // repetirse), y prioriza rellenar el último mes con datos reales (p.ej. mayo).
+    // "Completo" = nº de días con datos >= (días del mes − 2), para tolerar el
+    // retraso de publicación de Datadis de 1-2 días.
     const now=new Date();
     let ty=now.getFullYear(), tm=now.getMonth();
-    if(now.getDate()<=3){tm--;if(tm<0){tm=11;ty--;}}
-    const mesKey=ty+'/'+String(tm+1).padStart(2,'0');
+    let mesKey=null;
+    for(let i=0;i<6;i++){ // miramos hasta 6 meses hacia atrás
+      const y=ty, m=tm;
+      const prefix=y+'/'+String(m+1).padStart(2,'0')+'/';
+      const diasMes=new Date(y,m+1,0).getDate();
+      const esMesActual=(y===now.getFullYear()&&m===now.getMonth());
+      // umbral: el mes actual nunca está "completo"; los pasados necesitan casi todos los días
+      const umbral=esMesActual ? (now.getDate()-2) : (diasMes-2);
+      const diasEnCache=Object.keys(REAL_CONS).filter(k=>k.startsWith(prefix)).length;
+      if(diasEnCache < umbral){mesKey=y+'/'+String(m+1).padStart(2,'0');break;}
+      // pasar al mes anterior
+      tm--;if(tm<0){tm=11;ty--;}
+    }
+    // Si todo está completo, refrescamos el mes actual por si hay días nuevos
+    if(!mesKey){mesKey=now.getFullYear()+'/'+String(now.getMonth()+1).padStart(2,'0');}
     const resp=await fetch('/api/datadis-consumo?mes='+encodeURIComponent(mesKey),{cache:'no-store'});
     const data=await resp.json();
-    if(!data || !data.ok){throw new Error(data && data.pista ? data.pista : 'API error');}
+    if(!data || !data.ok){
+      const es429=data && (data.httpStatus===429 || /429/.test(data.pista||''));
+      setLastTry({mes:mesKey,resultado:es429?'429':'error',detalle:data&&data.pista?data.pista:'API error'});
+      throw new Error(data && data.pista ? data.pista : 'API error');
+    }
     if(Array.isArray(data.consumoPorDia)){
       let nuevos=0;
       for(const item of data.consumoPorDia){
@@ -782,6 +814,7 @@ async function fetchDatadisCurrentMonth(){
         }
       }
       saveCache();setLastUpdate(Date.now());setLastError('');
+      setLastTry({mes:mesKey,resultado:'ok',detalle:data.consumoPorDia.length+' días'});
       if(nuevos>0)render();
     }
   }catch(e){
@@ -845,11 +878,41 @@ function maybeRefresh(){
 }
 // Tap en el badge: refresh manual con cooldown anti-spam
 function manualRefresh(){
+  // Mostrar info del último intento a Datadis
+  const t=getLastTry();
+  if(t){
+    const res=t.resultado==='ok'?'✓ datos recibidos':
+              t.resultado==='429'?'⏳ bloqueado 24h (429)':'⚠️ error';
+    let msg=`Último intento: ${fmtDateTime(t.ts)}\nMes: ${t.mes} · ${res}`;
+    if(t.resultado==='429'){
+      // Datadis desbloquea ~24h después del intento
+      const libre=t.ts+24*3600*1000;
+      msg+=`\nSe podrá reintentar: ${fmtDateTime(libre)}`;
+    }
+    showToast(msg);
+  }
   const now=Date.now();
   if(now-lastManualTap<MANUAL_COOLDOWN_MS){updateBadge();return;}
   lastManualTap=now;
   setLastError(''); // limpiar cualquier error previo
   fetchDatadisCurrentMonth();
+}
+// Toast: mensaje flotante temporal en la parte inferior
+function showToast(text){
+  let el=document.getElementById('snToast');
+  if(!el){
+    el=document.createElement('div');el.id='snToast';
+    el.style.cssText='position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:9999;'
+      +'background:rgba(20,20,35,.96);color:#fff;padding:12px 16px;border-radius:14px;'
+      +'font-size:13px;line-height:1.5;max-width:85%;white-space:pre-line;text-align:center;'
+      +'box-shadow:0 8px 30px rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.12);'
+      +'opacity:0;transition:opacity .25s';
+    document.body.appendChild(el);
+  }
+  el.textContent=text;
+  requestAnimationFrame(()=>{el.style.opacity='1';});
+  clearTimeout(el._t);
+  el._t=setTimeout(()=>{el.style.opacity='0';},4500);
 }
 // Reset profundo: borra solo los datos de Datadis del localStorage y fuerza sincronización
 // Se activa manteniendo pulsado el badge 3 segundos
@@ -859,6 +922,7 @@ function hardReset(){
     localStorage.removeItem(LS_TIME);
     localStorage.removeItem(LS_ERR);
     localStorage.removeItem(LS_HIST);
+    localStorage.removeItem(LS_TRY);
   }catch(e){}
   REAL_CONS=Object.assign({},SEED_REAL_CONS);
   lastManualTap=0;
