@@ -313,8 +313,8 @@
       <div class="ch"><h2>Gráficas</h2><span class="small">elige qué ver</span></div>
       <div class="chips">
         <div class="chip on" data-s="cons" onclick="toggleSeries('cons')"><span class="d" style="background:var(--cons2)"></span>Consumo</div>
-        <div class="chip soon" data-s="prod"><span class="d" style="background:var(--prod2)"></span>Producción</div>
-        <div class="chip soon" data-s="exp"><span class="d" style="background:var(--exp2)"></span>Vertido</div>
+        <div class="chip" data-s="prod" onclick="toggleSeries('prod')"><span class="d" style="background:var(--prod2)"></span>Producción</div>
+        <div class="chip" data-s="exp" onclick="toggleSeries('exp')"><span class="d" style="background:var(--exp2)"></span>Vertido</div>
       </div>
       <div class="chart-box" style="height:250px"><canvas id="cInformes"></canvas></div>
     </div>
@@ -973,11 +973,21 @@ function genDay(d){
   }
   const real=realConsOf(d);
   const cons=[],prod=[],exp=[],imp=[],self=[];
+  // Datos solares reales del día (de Solis), si existen
+  const prodDia=prodOf(d), expDia=expOf(d);
+  // Forma de campana solar centrada en el mediodía (h=13) para repartir producción/vertido
+  let solShape=[],solSum=0;
+  for(let h=0;h<24;h++){const s=(h>=6&&h<=21)?Math.exp(-Math.pow(h-13.5,2)/14):0;solShape.push(s);solSum+=s;}
+  solSum=solSum||1;
   if(real!==null){
     const tot=shape.reduce((a,b)=>a+b,0)||1;const k=real/tot;
-    for(let h=0;h<24;h++){const c=shape[h]*k;cons.push(c);prod.push(0);self.push(0);exp.push(0);imp.push(c);}
+    for(let h=0;h<24;h++){const c=shape[h]*k;cons.push(c);imp.push(c);self.push(0);
+      prod.push(prodDia!=null?prodDia*solShape[h]/solSum:0);
+      exp.push(expDia!=null?expDia*solShape[h]/solSum:0);}
   }else{
-    for(let h=0;h<24;h++){cons.push(0);prod.push(0);self.push(0);exp.push(0);imp.push(0);}
+    for(let h=0;h<24;h++){cons.push(0);self.push(0);imp.push(0);
+      prod.push(prodDia!=null?prodDia*solShape[h]/solSum:0);
+      exp.push(expDia!=null?expDia*solShape[h]/solSum:0);}
   }
   return {prod,cons,exp,imp,self};
 }
@@ -1119,7 +1129,8 @@ function periodCost(){
   let comp=exp*tariff.exc;if(comp>energy)comp=energy;return Math.max(0,energy-comp);
 }
 function renderInformes(){
-  periodLabels('r');const D=periodData();drawCompare('cInformes',D,{prod:false,cons:true,exp:false,imp:false});
+  periodLabels('r');const D=periodData();
+  drawCompare('cInformes',D,{prod:state.series.prod,cons:state.series.cons,exp:state.series.exp,imp:false});
   const fmt=state.mode==='day'?f1:f0,t=D.t;
   document.getElementById('rTiles').innerHTML=`<div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--cons1),var(--cons2))"></div><div class="t">Consumo de red</div><div class="v num">${fmt(t.cons)}<small>kWh</small></div></div><div class="glass stat"><div class="ic" style="background:linear-gradient(135deg,var(--gold1),var(--gold2))"></div><div class="t">Coste estimado</div><div class="v num">€${e2(periodCost())}</div></div>`;
   // Tabla franjas: solo en modo mes
