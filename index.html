@@ -872,9 +872,19 @@ async function fetchDatadisHistory(){
 }
 
 // Decide si toca actualizar según la edad de los datos
+// Intenta refrescar al abrir la app, pero como mucho una vez cada 12h.
+// Se basa en el último INTENTO (no el último éxito), para no quemar la
+// consulta diaria de Datadis cuando hay 429, y para que abrir la app varias
+// veces seguidas no dispare múltiples peticiones.
+const AUTO_TRY_COOLDOWN = 12*3600*1000; // 12 horas entre intentos automáticos
 function maybeRefresh(){
-  const age=Date.now()-getLastUpdate();
-  if(age>REFRESH_AGE_MS)fetchDatadisCurrentMonth();
+  const t=getLastTry();
+  const lastTryTs = t ? t.ts : 0;
+  // Si el último intento tuvo éxito y es muy reciente (<12h), no insistir.
+  // Si falló (429/error) o no hay intento, reintentar pasadas 12h del anterior.
+  if(Date.now()-lastTryTs > AUTO_TRY_COOLDOWN){
+    fetchDatadisCurrentMonth();
+  }
 }
 // Tap en el badge: refresh manual con cooldown anti-spam
 function manualRefresh(){
@@ -882,12 +892,12 @@ function manualRefresh(){
   const t=getLastTry();
   if(t){
     const res=t.resultado==='ok'?'✓ datos recibidos':
-              t.resultado==='429'?'⏳ bloqueado 24h (429)':'⚠️ error';
+              t.resultado==='429'?'⏳ bloqueado por Datadis (429)':'⚠️ error';
     let msg=`Último intento: ${fmtDateTime(t.ts)}\nMes: ${t.mes} · ${res}`;
     if(t.resultado==='429'){
-      // Datadis desbloquea ~24h después del intento
-      const libre=t.ts+24*3600*1000;
-      msg+=`\nSe podrá reintentar: ${fmtDateTime(libre)}`;
+      // No podemos saber el momento exacto de desbloqueo de Datadis (cuenta 24h
+      // desde SU registro, no desde nuestro intento). Damos info honesta.
+      msg+=`\nDatadis limita a 1 consulta/mes cada 24h.\nVuelve a intentarlo más tarde.`;
     }
     showToast(msg);
   }
