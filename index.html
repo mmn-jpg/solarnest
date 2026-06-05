@@ -648,30 +648,65 @@ function periodSolar(store){
   return hay?sum:null;
 }
 
+// Guarda en los almacenes Solis un array de días recibido de la API
+function storeSolisDias(dias){
+  let nuevos=0;
+  for(const dia of dias){
+    if(!dia.fecha)continue;
+    let dt;
+    if(/^\d+$/.test(String(dia.fecha)))dt=new Date(parseInt(dia.fecha,10));
+    else dt=new Date(dia.fecha);
+    const k=dayKey(dt);
+    if(typeof dia.produccion_kwh==='number'){if(SOLAR_PROD[k]!==dia.produccion_kwh)nuevos++;SOLAR_PROD[k]=dia.produccion_kwh;}
+    if(typeof dia.vertido_kwh==='number')SOLAR_EXP[k]=dia.vertido_kwh;
+    if(typeof dia.consumo_kwh==='number')SOLAR_CONS[k]=dia.consumo_kwh;
+    if(typeof dia.compra_kwh==='number')SOLAR_IMP[k]=dia.compra_kwh;
+    if(typeof dia.autoconsumo_kwh==='number')SOLAR_SELF[k]=dia.autoconsumo_kwh;
+  }
+  return nuevos;
+}
+
+// Pide a Solis los datos de un mes concreto (formato 'YYYY-MM')
+async function fetchSolisMonth(mesKey){
+  const resp=await fetch('/api/solis-produccion?tipo=mes&fecha='+mesKey,{cache:'no-store'});
+  const json=await resp.json();
+  if(json.ok && Array.isArray(json.dias))return storeSolisDias(json.dias);
+  return 0;
+}
+
 // Pide a Solis los datos del mes actual (día a día) y los guarda
 async function fetchSolisCurrentMonth(){
   try{
     const mesKey=`${TODAY.getFullYear()}-${String(TODAY.getMonth()+1).padStart(2,'0')}`;
-    const resp=await fetch('/api/solis-produccion?tipo=mes&fecha='+mesKey,{cache:'no-store'});
-    const json=await resp.json();
-    if(json.ok && Array.isArray(json.dias)){
-      for(const dia of json.dias){
-        if(!dia.fecha)continue;
-        // dia.fecha viene como timestamp o 'YYYY-MM-DD'; normalizamos a clave Y/M/D
-        let dt;
-        if(/^\d+$/.test(String(dia.fecha)))dt=new Date(parseInt(dia.fecha,10));
-        else dt=new Date(dia.fecha);
-        const k=dayKey(dt);
-        if(typeof dia.produccion_kwh==='number')SOLAR_PROD[k]=dia.produccion_kwh;
-        if(typeof dia.vertido_kwh==='number')SOLAR_EXP[k]=dia.vertido_kwh;
-        if(typeof dia.consumo_kwh==='number')SOLAR_CONS[k]=dia.consumo_kwh;
-        if(typeof dia.compra_kwh==='number')SOLAR_IMP[k]=dia.compra_kwh;
-        if(typeof dia.autoconsumo_kwh==='number')SOLAR_SELF[k]=dia.autoconsumo_kwh;
-      }
-      saveSolisCache();setSolisLastUpdate(Date.now());
-      render();
-    }
+    const nuevos=await fetchSolisMonth(mesKey);
+    saveSolisCache();setSolisLastUpdate(Date.now());
+    if(nuevos>0)render();
   }catch(e){console.warn('Solis fetch failed',e);}
+}
+
+// Recupera el histórico de Solis: todos los meses desde la instalación (may 2026)
+// hasta el mes actual que aún no tengamos en cache. Solis no limita como Datadis,
+// así que podemos pedir varios meses seguidos. Se ejecuta una vez por sesión.
+const SOLIS_START_Y=2026, SOLIS_START_M=4; // mayo 2026 (mes 0-based) = inicio instalación
+async function fetchSolisHistory(){
+  try{
+    let y=SOLIS_START_Y, m=SOLIS_START_M;
+    let huboNuevos=false;
+    while(y<TODAY.getFullYear() || (y===TODAY.getFullYear() && m<=TODAY.getMonth())){
+      const prefix=y+'/'+String(m+1).padStart(2,'0')+'/';
+      const diasEnCache=Object.keys(SOLAR_PROD).filter(k=>k.startsWith(prefix)).length;
+      // Si el mes no está completo en cache, lo pedimos (saltamos el mes actual, ya lo trae fetchSolisCurrentMonth)
+      const esMesActual=(y===TODAY.getFullYear()&&m===TODAY.getMonth());
+      if(!esMesActual && diasEnCache<5){
+        const mesKey=y+'-'+String(m+1).padStart(2,'0');
+        const nuevos=await fetchSolisMonth(mesKey);
+        if(nuevos>0)huboNuevos=true;
+        await new Promise(r=>setTimeout(r,800));
+      }
+      m++;if(m>11){m=0;y++;}
+    }
+    if(huboNuevos){saveSolisCache();render();}
+  }catch(e){console.warn('Solis history failed',e);}
 }
 
 
@@ -723,7 +758,15 @@ async function fetchDatadisCurrentMonth(){
   setLastError(''); // limpiar error anterior antes de intentar
   updateBadge();
   try{
-    const resp=await fetch('/api/datadis-consumo',{cache:'no-store'});
+    // Datadis publica el consumo con 1-2 días de retraso, así que el mes en
+    // curso suele estar vacío a principios de mes. Elegimos el mes objetivo:
+    // si estamos en los primeros 3 días del mes, pedimos el mes ANTERIOR
+    // (que ya está completo); si no, el mes actual.
+    const now=new Date();
+    let ty=now.getFullYear(), tm=now.getMonth();
+    if(now.getDate()<=3){tm--;if(tm<0){tm=11;ty--;}}
+    const mesKey=ty+'/'+String(tm+1).padStart(2,'0');
+    const resp=await fetch('/api/datadis-consumo?mes='+encodeURIComponent(mesKey),{cache:'no-store'});
     const data=await resp.json();
     if(!data || !data.ok){throw new Error(data && data.pista ? data.pista : 'API error');}
     if(Array.isArray(data.consumoPorDia)){
@@ -831,7 +874,9 @@ function initData(){
   setTimeout(()=>{
     if(Date.now()-getSolisLastUpdate()>REFRESH_AGE_MS)fetchSolisCurrentMonth();
   },2000);
-  // Histórico: arranca en background con más retraso para no interferir con la carga inicial
+  // Solis histórico: recupera meses anteriores que falten (desde la instalación)
+  setTimeout(()=>{fetchSolisHistory();},3000);
+  // Histórico Datadis: arranca en background con más retraso para no interferir con la carga inicial
   setTimeout(()=>{fetchDatadisHistory();},4000);
 }
 
