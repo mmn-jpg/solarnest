@@ -1,17 +1,93 @@
 // =============================================================
-//  SolarNest · Consumo real desde Datadis
+//  SolarNest · Consumo real desde Datadis (con caché compartida en Redis)
 //  Pide tu consumo horario a Datadis y lo resume por días.
 //
 //  Uso:
 //   /api/datadis-consumo                 -> mes actual
 //   /api/datadis-consumo?mes=2026/04     -> un mes concreto (AAAA/MM)
+//   /api/datadis-consumo?mes=2026/04&forzar=1 -> ignora caché y pide a Datadis
 //
 //  Credenciales: variables de entorno DATADIS_USER y DATADIS_PASS
+//
+//  CACHÉ COMPARTIDA (Upstash Redis):
+//   Para que TODOS los dispositivos compartan los datos y Datadis se consulte
+//   una sola vez al día (en vez de una por dispositivo, que disparaba el 429),
+//   guardamos cada mes en Redis. Cuando llega una petición:
+//     1) Si Redis tiene ese mes y es reciente (<20h) -> se devuelve al instante.
+//     2) Si no, se consulta a Datadis, se guarda en Redis y se devuelve.
+//     3) Si Datadis da 429 pero hay algo en Redis (aunque sea viejo) -> se
+//        devuelve lo de Redis para no dejar al usuario sin datos.
+//   Variables de entorno (las crea sola la integración de Upstash en Vercel):
+//     KV_REST_API_URL y KV_REST_API_TOKEN
 // =============================================================
 
 const CUPS = 'ES0031408041899001FT0F'; // tu suministro
 const DISTRIBUTOR = '2';               // E-distribución
 const POINT_TYPE = '5';                // tipo de punto (doméstico habitual)
+
+const CACHE_FRESH_MS = 20 * 3600 * 1000; // datos "frescos" si tienen menos de 20h
+
+// ---------- Helpers de Redis (Upstash REST API) ----------
+// Usamos la REST API de Upstash (HTTP), que funciona en funciones serverless.
+const KV_URL = process.env.KV_REST_API_URL;
+const KV_TOKEN = process.env.KV_REST_API_TOKEN;
+
+async function redisGet(key) {
+  if (!KV_URL || !KV_TOKEN) return null;
+  try {
+    const r = await fetch(`${KV_URL}/get/${encodeURIComponent(key)}`, {
+      headers: { Authorization: `Bearer ${KV_TOKEN}` }
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    // Upstash devuelve { result: "<valor o null>" }
+    if (!j || j.result == null) return null;
+    return JSON.parse(j.result);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function redisSet(key, value) {
+  if (!KV_URL || !KV_TOKEN) return false;
+  try {
+    // Guardamos como string JSON. POST con el cuerpo = valor.
+    const r = await fetch(`${KV_URL}/set/${encodeURIComponent(key)}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${KV_TOKEN}`,
+        'Content-Type': 'text/plain'
+      },
+      body: JSON.stringify(value)
+    });
+    return r.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Construye el objeto de respuesta a partir de los datos crudos de Datadis
+function resumirDatos(datos, mes) {
+  const porDia = {};
+  let totalMes = 0;
+  for (const r of datos) {
+    const kwh = Number(r.consumptionKWh) || 0;
+    totalMes += kwh;
+    const dia = r.date; // AAAA/MM/DD
+    if (!porDia[dia]) porDia[dia] = 0;
+    porDia[dia] += kwh;
+  }
+  const dias = Object.keys(porDia).sort().map(d => ({ dia: d, kwh: Number(porDia[d].toFixed(3)) }));
+  return {
+    ok: true,
+    mesConsultado: mes,
+    registrosHorarios: datos.length,
+    totalMesKWh: Number(totalMes.toFixed(2)),
+    numeroDias: dias.length,
+    primerRegistro: { fecha: datos[0].date, hora: datos[0].time, kwh: datos[0].consumptionKWh, metodo: datos[0].obtainMethod },
+    consumoPorDia: dias
+  };
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -33,20 +109,39 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: false, error: 'Formato de mes inválido. Usa AAAA/MM, p.ej. 2026/04.' });
   }
 
+  const forzar = req.query && (req.query.forzar === '1' || req.query.forzar === 'true');
+  const cacheKey = 'datadis:' + mes; // p.ej. "datadis:2026/05"
+
+  // ---------- 1) Intentar servir desde la caché de Redis ----------
+  let cacheGuardada = null;
+  if (!forzar) {
+    cacheGuardada = await redisGet(cacheKey);
+    if (cacheGuardada && cacheGuardada.guardadoEn && cacheGuardada.datos) {
+      const edad = Date.now() - cacheGuardada.guardadoEn;
+      if (edad < CACHE_FRESH_MS) {
+        // Datos frescos: los devolvemos sin tocar Datadis
+        return res.status(200).json({ ...cacheGuardada.datos, _cache: 'fresca', _edadMin: Math.round(edad / 60000) });
+      }
+    }
+  }
+
+  // ---------- 2) Consultar a Datadis ----------
   try {
-    // 1) token
     const auth = await fetch('https://datadis.es/nikola-auth/tokens/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ username: USER, password: PASS }).toString()
     });
     if (!auth.ok) {
+      // Si falla el login pero teníamos algo en caché (aunque viejo), lo damos
+      if (cacheGuardada && cacheGuardada.datos) {
+        return res.status(200).json({ ...cacheGuardada.datos, _cache: 'vieja', _motivo: 'login-fallido' });
+      }
       return res.status(200).json({ ok: false, paso: 'login', httpStatus: auth.status,
         pista: 'No se pudo iniciar sesión en Datadis.' });
     }
     const token = (await auth.text()).trim();
 
-    // 2) consumo del mes
     const url = 'https://datadis.es/api-private/api/get-consumption-data'
       + '?cups=' + encodeURIComponent(CUPS)
       + '&distributorCode=' + DISTRIBUTOR
@@ -62,6 +157,14 @@ export default async function handler(req, res) {
 
     if (!cons.ok) {
       const texto = await cons.text();
+      // Si Datadis da error (429 u otro) pero teníamos caché vieja, la devolvemos
+      if (cacheGuardada && cacheGuardada.datos) {
+        return res.status(200).json({
+          ...cacheGuardada.datos,
+          _cache: 'vieja',
+          _motivo: cons.status === 429 ? 'datadis-429' : 'datadis-error-' + cons.status
+        });
+      }
       return res.status(200).json({
         ok: false, paso: 'get-consumption-data', httpStatus: cons.status, mesConsultado: mes,
         pista: cons.status === 429
@@ -76,33 +179,26 @@ export default async function handler(req, res) {
     const datos = await cons.json(); // array de registros horarios
 
     if (!Array.isArray(datos) || datos.length === 0) {
+      // Sin datos nuevos: si teníamos caché, la devolvemos; si no, mensaje vacío
+      if (cacheGuardada && cacheGuardada.datos) {
+        return res.status(200).json({ ...cacheGuardada.datos, _cache: 'vieja', _motivo: 'sin-datos-nuevos' });
+      }
       return res.status(200).json({ ok: true, mesConsultado: mes, registros: 0,
         mensaje: 'Sin datos para ese mes (puede que aún no estén validados).' });
     }
 
-    // 3) resumir por día y total
-    const porDia = {};
-    let totalMes = 0;
-    for (const r of datos) {
-      const kwh = Number(r.consumptionKWh) || 0;
-      totalMes += kwh;
-      const dia = r.date; // formato AAAA/MM/DD
-      if (!porDia[dia]) porDia[dia] = 0;
-      porDia[dia] += kwh;
-    }
-    const dias = Object.keys(porDia).sort().map(d => ({ dia: d, kwh: Number(porDia[d].toFixed(3)) }));
+    // ---------- 3) Resumir, guardar en Redis y devolver ----------
+    const resultado = resumirDatos(datos, mes);
+    // Guardamos en Redis con marca de tiempo (no esperamos al guardado para responder rápido)
+    redisSet(cacheKey, { guardadoEn: Date.now(), datos: resultado });
 
-    return res.status(200).json({
-      ok: true,
-      mesConsultado: mes,
-      registrosHorarios: datos.length,
-      totalMesKWh: Number(totalMes.toFixed(2)),
-      numeroDias: dias.length,
-      primerRegistro: { fecha: datos[0].date, hora: datos[0].time, kwh: datos[0].consumptionKWh, metodo: datos[0].obtainMethod },
-      consumoPorDia: dias
-    });
+    return res.status(200).json({ ...resultado, _cache: 'nueva' });
 
   } catch (e) {
+    // Excepción de red: si hay caché vieja, mejor eso que un error
+    if (cacheGuardada && cacheGuardada.datos) {
+      return res.status(200).json({ ...cacheGuardada.datos, _cache: 'vieja', _motivo: 'excepcion' });
+    }
     return res.status(200).json({ ok: false, paso: 'excepcion', error: String(e) });
   }
 }
