@@ -1009,10 +1009,29 @@ function yearAgg(d){
   return{labels,prod,cons,exp,imp,totals:t};
 }
 
+// Festivos nacionales de España (ámbito estatal) que aplican a la tarifa 2.0TD.
+// En 2.0TD, sábados, domingos y festivos NACIONALES son valle las 24h.
+// (Los festivos autonómicos/locales NO cuentan para la tarifa eléctrica.)
+const FESTIVOS_NAC = new Set([
+  // 2026
+  '2026-01-01','2026-01-06','2026-04-03','2026-05-01','2026-08-15',
+  '2026-10-12','2026-11-01','2026-12-06','2026-12-08','2026-12-25',
+  // 2025 (por si se navega a meses anteriores)
+  '2025-01-01','2025-01-06','2025-04-18','2025-05-01','2025-08-15',
+  '2025-10-12','2025-11-01','2025-12-06','2025-12-08','2025-12-25',
+  // 2027
+  '2027-01-01','2027-01-06','2027-03-26','2027-05-01','2027-08-15',
+  '2027-10-12','2027-11-01','2027-12-06','2027-12-08','2027-12-25'
+]);
+function esFestivoNacional(date){
+  const k=date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0');
+  return FESTIVOS_NAC.has(k);
+}
 function periodOf(hour,date){
   const t=tariffFor(date);
   const wd=date.getDay();
-  if(t.weekendValle&&(wd===0||wd===6))return 'V';
+  // Sábado (6), domingo (0) o festivo nacional → todo valle (si la tarifa lo aplica)
+  if(t.weekendValle&&(wd===0||wd===6||esFestivoNacional(date)))return 'V';
   return t.bands[hour];
 }
 function computeBill(y,m,lastDay){
