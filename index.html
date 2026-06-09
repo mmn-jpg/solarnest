@@ -764,58 +764,76 @@ function updateBadge(){
   if(isFetching){el.textContent='Datadis · actualizando…';el.style.opacity='.7';return;}
   el.style.opacity='1';
   const t=getLastUpdate(),err=getLastError();
-  if(err && !t){el.textContent='Datadis · sin conexión';return;}
-  if(err){el.textContent='Datadis · '+timeAgo(t)+' (sin conexión)';return;}
-  el.textContent='Datadis · '+timeAgo(t);
+  // ¿Tenemos datos reales de Datadis en caché? (más allá de los datos semilla)
+  const hayDatosReales=Object.keys(REAL_CONS).length>Object.keys(SEED_REAL_CONS).length;
+  if(t){
+    // Hubo al menos un éxito: mostramos hace cuánto, y avisamos si el último intento falló
+    el.textContent = err ? 'Datadis · '+timeAgo(t)+' (reintentando)' : 'Datadis · '+timeAgo(t);
+    return;
+  }
+  // Nunca hubo éxito registrado
+  if(hayDatosReales){el.textContent='Datadis · datos en caché';return;}
+  if(err){el.textContent='Datadis · sin conexión';return;}
+  el.textContent='Datadis · cargando…';
 }
 
 // Llama a nuestra función serverless para traer el mes actual
-async function fetchDatadisCurrentMonth(){
-  if(isFetching)return;isFetching=true;
-  setLastError(''); // limpiar error anterior antes de intentar
-  updateBadge();
+// Pide UN mes concreto a Datadis (vía nuestro backend con caché Redis) y
+// vuelca los días en REAL_CONS. Devuelve {ok, nuevos, resultado, pista}.
+async function fetchDatadisMes(mesKey){
   try{
-    // Elegimos QUÉ mes pedir de forma inteligente: el mes más reciente que aún
-    // no tengamos "completo" en caché. Esto evita gastar la única consulta diaria
-    // de Datadis en el mes en curso (que apenas tiene datos y suele dar 429 al
-    // repetirse), y prioriza rellenar el último mes con datos reales (p.ej. mayo).
-    // "Completo" = nº de días con datos >= (días del mes − 2), para tolerar el
-    // retraso de publicación de Datadis de 1-2 días.
-    const now=new Date();
-    let ty=now.getFullYear(), tm=now.getMonth();
-    let mesKey=null;
-    for(let i=0;i<6;i++){ // miramos hasta 6 meses hacia atrás
-      const y=ty, m=tm;
-      const prefix=y+'/'+String(m+1).padStart(2,'0')+'/';
-      const diasMes=new Date(y,m+1,0).getDate();
-      const esMesActual=(y===now.getFullYear()&&m===now.getMonth());
-      // umbral: el mes actual nunca está "completo"; los pasados necesitan casi todos los días
-      const umbral=esMesActual ? (now.getDate()-2) : (diasMes-2);
-      const diasEnCache=Object.keys(REAL_CONS).filter(k=>k.startsWith(prefix)).length;
-      if(diasEnCache < umbral){mesKey=y+'/'+String(m+1).padStart(2,'0');break;}
-      // pasar al mes anterior
-      tm--;if(tm<0){tm=11;ty--;}
-    }
-    // Si todo está completo, refrescamos el mes actual por si hay días nuevos
-    if(!mesKey){mesKey=now.getFullYear()+'/'+String(now.getMonth()+1).padStart(2,'0');}
     const resp=await fetch('/api/datadis-consumo?mes='+encodeURIComponent(mesKey),{cache:'no-store'});
     const data=await resp.json();
     if(!data || !data.ok){
       const es429=data && (data.httpStatus===429 || /429/.test(data.pista||''));
-      setLastTry({mes:mesKey,resultado:es429?'429':'error',detalle:data&&data.pista?data.pista:'API error'});
-      throw new Error(data && data.pista ? data.pista : 'API error');
+      return {ok:false, resultado:es429?'429':'error', pista:data&&data.pista?data.pista:'API error'};
     }
+    let nuevos=0;
     if(Array.isArray(data.consumoPorDia)){
-      let nuevos=0;
       for(const item of data.consumoPorDia){
         if(item && item.dia && typeof item.kwh==='number'){
           if(REAL_CONS[item.dia]!==item.kwh)nuevos++;
           REAL_CONS[item.dia]=item.kwh;
         }
       }
+    }
+    return {ok:true, nuevos, resultado:'ok', cache:data._cache||'?', dias:Array.isArray(data.consumoPorDia)?data.consumoPorDia.length:0};
+  }catch(e){
+    return {ok:false, resultado:'error', pista:String(e.message||e)};
+  }
+}
+
+// Sincroniza Datadis: pide el mes actual y el anterior (que son los que se ven
+// en las vistas Día/Mes). El backend tiene caché Redis compartida, así que esto
+// es barato y seguro de llamar al abrir la app: si los datos ya están en Redis,
+// vienen al instante sin tocar Datadis; si no, el backend hace UNA consulta y
+// la guarda para todos los dispositivos. Ya no hay riesgo de 429 por dispositivo.
+async function fetchDatadisCurrentMonth(){
+  if(isFetching)return;isFetching=true;
+  setLastError('');
+  updateBadge();
+  try{
+    const now=new Date();
+    // Mes actual y mes anterior
+    const meses=[];
+    meses.push(now.getFullYear()+'/'+String(now.getMonth()+1).padStart(2,'0'));
+    let py=now.getFullYear(), pm=now.getMonth()-1; if(pm<0){pm=11;py--;}
+    meses.push(py+'/'+String(pm+1).padStart(2,'0'));
+
+    let algunOk=false, ultimaPista='', algun429=false, totalNuevos=0;
+    for(const mesKey of meses){
+      const r=await fetchDatadisMes(mesKey);
+      if(r.ok){algunOk=true;totalNuevos+=r.nuevos||0;}
+      else{ultimaPista=r.pista||'';if(r.resultado==='429')algun429=true;}
+    }
+
+    if(algunOk){
       saveCache();setLastUpdate(Date.now());setLastError('');
-      setLastTry({mes:mesKey,resultado:'ok',detalle:data.consumoPorDia.length+' días'});
-      if(nuevos>0)render();
+      setLastTry({mes:meses.join(' + '),resultado:'ok',detalle:totalNuevos+' días nuevos'});
+      render();
+    }else{
+      setLastTry({mes:meses.join(' + '),resultado:algun429?'429':'error',detalle:ultimaPista});
+      setLastError(ultimaPista||'No se pudo sincronizar');
     }
   }catch(e){
     console.warn('Datadis fetch failed:',e.message||e);
@@ -825,63 +843,48 @@ async function fetchDatadisCurrentMonth(){
   }
 }
 
-// Sincroniza UN mes histórico por sesión que no tengamos en cache.
-// Cooldown de 7 días entre ejecuciones completas para no saturar Datadis (error 429).
+// Sincroniza meses históricos que falten. Como el backend tiene caché Redis,
+// pedir meses pasados es barato (vienen de Redis si ya están). Recorremos desde
+// el mes actual hacia atrás hasta el inicio de datos disponibles.
+// Cooldown de 6h entre ejecuciones para no machacar, pero ya sin riesgo de 429.
 const LS_HIST='datadis_histLastRun';
 async function fetchDatadisHistory(){
-  // Cooldown: si ya corrió en los últimos 7 días, no hacer nada
   try{
     const last=parseInt(localStorage.getItem(LS_HIST)||'0');
-    if(Date.now()-last < 7*24*60*60*1000) return;
+    if(Date.now()-last < 6*60*60*1000) return; // cooldown 6h
   }catch(e){}
 
   const now=new Date();
-  let y=now.getFullYear(), m=now.getMonth()-1;
-  if(m<0){m=11;y--;}
+  // Empezamos 2 meses atrás (el actual y el anterior ya los pide fetchDatadisCurrentMonth)
+  let y=now.getFullYear(), m=now.getMonth()-2;
+  while(m<0){m+=12;y--;}
 
-  // Encuentra el primer mes sin datos suficientes (< 5 días)
-  for(let i=0;i<60;i++){
-    if(y<2021||(y===2021&&m<5))break;
-    const mesKey=y+'/'+String(m+1).padStart(2,'0');
+  let huboNuevos=false;
+  // Recorremos hasta 14 meses hacia atrás buscando huecos
+  for(let i=0;i<14;i++){
+    if(y<2025||(y===2025&&m<5))break; // no hay datos antes de may 2025 (límite razonable)
     const prefix=y+'/'+String(m+1).padStart(2,'0')+'/';
     const diasConDatos=Object.keys(REAL_CONS).filter(k=>k.startsWith(prefix)).length;
-    if(diasConDatos<5){
-      // Lanza UNA sola petición y para. La siguiente sesión cogerá el siguiente mes.
-      await new Promise(r=>setTimeout(r,2000));
-      try{
-        const resp=await fetch('/api/datadis-consumo?mes='+encodeURIComponent(mesKey),{cache:'no-store'});
-        const data=await resp.json();
-        if(data && data.ok && Array.isArray(data.consumoPorDia)){
-          for(const item of data.consumoPorDia){
-            if(item && item.dia && typeof item.kwh==='number') REAL_CONS[item.dia]=item.kwh;
-          }
-          saveCache();render();
-          console.log('History: sincronizado',mesKey);
-        } else {
-          console.warn('History: no se pudo sincronizar',mesKey, data && data.pista);
-        }
-      }catch(e){console.warn('History fetch failed for',mesKey,e);}
-      // Marca la ejecución aunque haya fallado, para respetar el cooldown
-      try{localStorage.setItem(LS_HIST,String(Date.now()));}catch(e){}
-      return; // Una sola llamada por sesión, siempre
+    const diasMes=new Date(y,m+1,0).getDate();
+    if(diasConDatos < diasMes-3){ // mes incompleto
+      const mesKey=y+'/'+String(m+1).padStart(2,'0');
+      const r=await fetchDatadisMes(mesKey);
+      if(r.ok && r.nuevos>0)huboNuevos=true;
+      await new Promise(r=>setTimeout(r,600)); // pequeña pausa entre meses
     }
     m--;if(m<0){m=11;y--;}
   }
-  // Si todos los meses ya tienen datos, marca igualmente para no volver a comprobar pronto
+  if(huboNuevos){saveCache();render();}
   try{localStorage.setItem(LS_HIST,String(Date.now()));}catch(e){}
 }
 
-// Decide si toca actualizar según la edad de los datos
-// Intenta refrescar al abrir la app, pero como mucho una vez cada 12h.
-// Se basa en el último INTENTO (no el último éxito), para no quemar la
-// consulta diaria de Datadis cuando hay 429, y para que abrir la app varias
-// veces seguidas no dispare múltiples peticiones.
-const AUTO_TRY_COOLDOWN = 12*3600*1000; // 12 horas entre intentos automáticos
+// Decide si toca actualizar al abrir la app. Como el backend tiene caché Redis
+// compartida (que protege contra el 429 de Datadis), podemos refrescar a menudo
+// sin riesgo: si los datos ya están en Redis, vienen al instante. Cooldown corto.
+const AUTO_TRY_COOLDOWN = 2*3600*1000; // 2 horas entre intentos automáticos
 function maybeRefresh(){
   const t=getLastTry();
   const lastTryTs = t ? t.ts : 0;
-  // Si el último intento tuvo éxito y es muy reciente (<12h), no insistir.
-  // Si falló (429/error) o no hay intento, reintentar pasadas 12h del anterior.
   if(Date.now()-lastTryTs > AUTO_TRY_COOLDOWN){
     fetchDatadisCurrentMonth();
   }
@@ -891,14 +894,10 @@ function manualRefresh(){
   // Mostrar info del último intento a Datadis
   const t=getLastTry();
   if(t){
-    const res=t.resultado==='ok'?'✓ datos recibidos':
-              t.resultado==='429'?'⏳ bloqueado por Datadis (429)':'⚠️ error';
-    let msg=`Último intento: ${fmtDateTime(t.ts)}\nMes: ${t.mes} · ${res}`;
-    if(t.resultado==='429'){
-      // No podemos saber el momento exacto de desbloqueo de Datadis (cuenta 24h
-      // desde SU registro, no desde nuestro intento). Damos info honesta.
-      msg+=`\nDatadis limita a 1 consulta/mes cada 24h.\nVuelve a intentarlo más tarde.`;
-    }
+    const res=t.resultado==='ok'?'✓ datos actualizados':
+              t.resultado==='429'?'⏳ Datadis ocupado, reintenta luego':'⚠️ error';
+    let msg=`Último intento: ${fmtDateTime(t.ts)}\n${res}`;
+    if(t.detalle)msg+=`\n${t.detalle}`;
     showToast(msg);
   }
   const now=Date.now();
