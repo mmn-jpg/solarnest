@@ -189,10 +189,14 @@ export default async function handler(req, res) {
 
     // ---------- 3) Resumir, guardar en Redis y devolver ----------
     const resultado = resumirDatos(datos, mes);
-    // Guardamos en Redis con marca de tiempo (no esperamos al guardado para responder rápido)
-    redisSet(cacheKey, { guardadoEn: Date.now(), datos: resultado });
-
-    return res.status(200).json({ ...resultado, _cache: 'nueva' });
+    // Solo guardamos en Redis si hay datos reales. Así evitamos cachear "mes vacío"
+    // (Datadis puede devolver registros con 0 kWh para el mes en curso aún sin publicar),
+    // lo que bloquearía las próximas 20h sirviendo ceros.
+    if (resultado.totalMesKWh > 0 && resultado.consumoPorDia.length > 0) {
+      redisSet(cacheKey, { guardadoEn: Date.now(), datos: resultado });
+    }
+    const cacheTag = resultado.totalMesKWh > 0 ? 'nueva' : 'vacia';
+    return res.status(200).json({ ...resultado, _cache: cacheTag });
 
   } catch (e) {
     // Excepción de red: si hay caché vieja, mejor eso que un error
