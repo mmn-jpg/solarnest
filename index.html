@@ -970,7 +970,9 @@ function genDay(d){
     c*=CONS_M[m]*cN*(0.92+0.16*r());
     shape.push(c);
   }
-  const real=realConsOf(d);
+  // Si Datadis no tiene el día, usamos compra_kwh de Solis como proxy (misma magnitud: consumo de red)
+  let real=realConsOf(d);
+  if(real===null){const k=dayKey(d);if(k in SOLAR_IMP)real=SOLAR_IMP[k];}
   const cons=[],prod=[],exp=[],imp=[],self=[];
   // Datos solares reales del día (de Solis), si existen
   const prodDia=prodOf(d), expDia=expOf(d);
