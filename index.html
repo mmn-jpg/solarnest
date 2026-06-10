@@ -716,7 +716,8 @@ async function fetchSolisHistory(){
 
 // ========= SISTEMA DE AUTO-ACTUALIZACIÓN DATADIS =========
 const LS_DATA='datadis_data', LS_TIME='datadis_lastUpdate', LS_ERR='datadis_lastError';
-const REFRESH_AGE_MS = 25*3600*1000;   // datos viejos si >25h (Datadis limita 1 consulta/mes/24h)
+const REFRESH_AGE_MS = 25*3600*1000;   // para Datadis: limita 1 consulta/mes/24h
+const SOLIS_REFRESH_AGE_MS = 1*3600*1000; // para Solis: sin límite de rate, refresca cada 1h
 const MANUAL_COOLDOWN_MS = 60*1000;    // tap manual: 1 min
 let isFetching=false, lastManualTap=0;
 
@@ -949,7 +950,7 @@ function initData(){
   setTimeout(()=>{maybeRefresh();},300);
   // Solis: refresca producción/vertido del mes actual si los datos tienen más de 25h
   setTimeout(()=>{
-    if(Date.now()-getSolisLastUpdate()>REFRESH_AGE_MS)fetchSolisCurrentMonth();
+    if(Date.now()-getSolisLastUpdate()>SOLIS_REFRESH_AGE_MS)fetchSolisCurrentMonth();
   },2000);
   // Solis histórico: recupera meses anteriores que falten (desde la instalación)
   setTimeout(()=>{fetchSolisHistory();},3000);
