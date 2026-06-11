@@ -126,12 +126,35 @@ module.exports = async (req, res) => {
           vertido_kwh: parseFloat(d.gridSellEnergy) || 0,
           compra_kwh: parseFloat(d.gridPurchasedEnergy) || 0,
           consumo_kwh: parseFloat(d.consumeEnergy) || 0,
-          autoconsumo_kwh: parseFloat(d.oneSelf) || 0
+          autoconsumo_kwh: parseFloat(d.oneSelf) || 0,
+          carga_kwh: parseFloat(d.batteryChargeEnergy) || 0,
+          descarga_kwh: parseFloat(d.batteryDischargeEnergy) || 0
         }))
       });
     }
 
-    return res.status(400).json({ ok: false, error: 'tipo no válido. Usa: lista, hoy, mes' });
+    if (tipo === 'ahora') {
+      // Estado en tiempo real del inversor: SoC batería, potencia actual, energía del día
+      // Usamos inverterDetail que devuelve los valores más recientes del inversor
+      const data = await solisRequest('/v1/api/inverterDetail', {
+        id: inv.id, sn: inv.sn
+      });
+      return res.status(200).json({
+        ok: true,
+        tipo: 'ahora',
+        sn: inv.sn,
+        soc: data.batteryCapacitySoc != null ? parseFloat(data.batteryCapacitySoc) : null,
+        // batteryPower: negativo = cargando (flujo hacia la batería), positivo = descargando
+        power_w: data.batteryPower != null ? parseFloat(data.batteryPower) : null,
+        pac_w: parseFloat(data.pac) || 0,               // potencia solar AC actual (W)
+        eHoy_kwh: parseFloat(data.eToday) || 0,         // producción solar de hoy
+        cargaHoy_kwh: parseFloat(data.batteryTodayChargeEnergy) || 0,
+        descargaHoy_kwh: parseFloat(data.batteryTodayDischargeEnergy) || 0,
+        ts: data.dataTimestamp || null
+      });
+    }
+
+    return res.status(400).json({ ok: false, error: 'tipo no válido. Usa: lista, hoy, mes, ahora' });
 
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
