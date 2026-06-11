@@ -240,6 +240,23 @@
   .bal-node.grid-out{border-color:rgba(52,209,88,.30);background:rgba(52,209,88,.06)}
   .bal-node.grid-out .bn-val{color:var(--exp2)}
   .bal-conn{color:var(--muted2);margin:1px 0}
+
+  /* Tarjeta Batería (Inicio) */
+  .batt-header{display:flex;align-items:center;gap:11px;margin-bottom:13px}
+  .batt-emoji{font-size:30px;line-height:1;flex:none}
+  .batt-pct{font-size:34px;font-weight:800;font-family:ui-rounded,"SF Pro Rounded",-apple-system;line-height:1}
+  .batt-pct small{font-size:16px;font-weight:700;opacity:.65}
+  .batt-track{height:10px;background:rgba(255,255,255,.1);border-radius:999px;overflow:hidden;margin-bottom:11px}
+  .batt-fill{height:100%;border-radius:999px;transition:width .9s cubic-bezier(.2,.7,.2,1)}
+  .batt-fill.hi{background:linear-gradient(90deg,var(--val),var(--exp2))}
+  .batt-fill.mid{background:linear-gradient(90deg,var(--gold2),var(--gold1))}
+  .batt-fill.lo{background:linear-gradient(90deg,#FF453A,#FF8C6B)}
+  .batt-status{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:700;
+    padding:5px 12px;border-radius:999px}
+  .batt-status.charging{background:rgba(52,199,89,.15);color:var(--exp2);border:1px solid rgba(52,199,89,.3)}
+  .batt-status.discharging{background:rgba(255,159,10,.15);color:var(--gold2);border:1px solid rgba(255,159,10,.3)}
+  .batt-status.idle{background:rgba(255,255,255,.08);color:var(--muted);border:1px solid var(--stroke)}
+  .batt-detail{font-size:12px;color:var(--muted);margin-top:9px;line-height:1.5}
 </style>
 </head>
 <body>
@@ -293,6 +310,20 @@
       <div class="soon-note" id="iAprovSub">Cuánto aprovechas tu instalación.</div>
       <div class="meter"><div class="r"><b>Autosuficiencia</b><span class="p num" id="iAutosuf">—</span></div><div class="track"><div class="fill" id="iAutosufBar" style="width:0%"></div></div></div>
       <div class="meter"><div class="r"><b>Autoconsumo solar</b><span class="p num" id="iAprov">—</span></div><div class="track"><div class="fill" id="iAprovBar" style="width:0%"></div></div></div>
+    </div>
+
+    <!-- Tarjeta Batería: estado en tiempo real -->
+    <div class="glass card" id="iBattCard" style="display:none">
+      <div class="batt-header">
+        <div class="batt-emoji" id="iBattEmoji">🔋</div>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:2px">Batería</div>
+          <div class="batt-pct num"><span id="iBattPct">—</span><small>%</small></div>
+        </div>
+      </div>
+      <div class="batt-track"><div class="batt-fill hi" id="iBattFill" style="width:0%"></div></div>
+      <div><span class="batt-status idle" id="iBattStatus">En reposo</span></div>
+      <div class="batt-detail" id="iBattDetail"></div>
     </div>
   </div>
 
@@ -619,6 +650,12 @@ let SOLAR_EXP  = {};
 let SOLAR_CONS = {};
 let SOLAR_IMP  = {};
 let SOLAR_SELF = {};
+let BATT_CHARGE = {};    // dayKey → kWh cargados en batería (de Solis mes)
+let BATT_DISCHARGE = {}; // dayKey → kWh descargados de batería (de Solis mes)
+let BATT_SOC_NOW = null;   // % SoC en tiempo real (de tipo=ahora)
+let BATT_POWER_NOW = null; // W (negativo=cargando, positivo=descargando)
+const BATT_REFRESH_MS = 15 * 60 * 1000; // refresco batería: cada 15 min
+let battLastFetch = 0;
 function prodOf(d){const k=dayKey(d);return (k in SOLAR_PROD)?SOLAR_PROD[k]:null;}
 function expOf(d){const k=dayKey(d);return (k in SOLAR_EXP)?SOLAR_EXP[k]:null;}
 const LS_SOLIS='solis_data', LS_SOLIS_TIME='solis_lastUpdate';
@@ -627,11 +664,15 @@ function loadSolisCache(){
     const raw=localStorage.getItem(LS_SOLIS);
     if(raw){const o=JSON.parse(raw);
       if(o&&o.prod)SOLAR_PROD=o.prod;if(o&&o.exp)SOLAR_EXP=o.exp;
-      if(o&&o.cons)SOLAR_CONS=o.cons;if(o&&o.imp)SOLAR_IMP=o.imp;if(o&&o.self)SOLAR_SELF=o.self;}
+      if(o&&o.cons)SOLAR_CONS=o.cons;if(o&&o.imp)SOLAR_IMP=o.imp;if(o&&o.self)SOLAR_SELF=o.self;
+      if(o&&o.bCharge)BATT_CHARGE=o.bCharge;if(o&&o.bDis)BATT_DISCHARGE=o.bDis;}
   }catch(e){}
 }
 function saveSolisCache(){
-  try{localStorage.setItem(LS_SOLIS,JSON.stringify({prod:SOLAR_PROD,exp:SOLAR_EXP,cons:SOLAR_CONS,imp:SOLAR_IMP,self:SOLAR_SELF}));}catch(e){}
+  try{localStorage.setItem(LS_SOLIS,JSON.stringify({
+    prod:SOLAR_PROD,exp:SOLAR_EXP,cons:SOLAR_CONS,imp:SOLAR_IMP,self:SOLAR_SELF,
+    bCharge:BATT_CHARGE,bDis:BATT_DISCHARGE
+  }));}catch(e){}
 }
 function getSolisLastUpdate(){const t=parseInt(localStorage.getItem(LS_SOLIS_TIME)||'0',10);return isNaN(t)?0:t;}
 function setSolisLastUpdate(t){try{localStorage.setItem(LS_SOLIS_TIME,String(t));}catch(e){}}
@@ -666,6 +707,8 @@ function storeSolisDias(dias){
     if(typeof dia.consumo_kwh==='number')SOLAR_CONS[k]=dia.consumo_kwh;
     if(typeof dia.compra_kwh==='number')SOLAR_IMP[k]=dia.compra_kwh;
     if(typeof dia.autoconsumo_kwh==='number')SOLAR_SELF[k]=dia.autoconsumo_kwh;
+    if(typeof dia.carga_kwh==='number')BATT_CHARGE[k]=dia.carga_kwh;
+    if(typeof dia.descarga_kwh==='number')BATT_DISCHARGE[k]=dia.descarga_kwh;
   }
   return nuevos;
 }
@@ -686,6 +729,26 @@ async function fetchSolisCurrentMonth(){
     saveSolisCache();setSolisLastUpdate(Date.now());
     if(nuevos>0)render();
   }catch(e){console.warn('Solis fetch failed',e);}
+}
+
+// Obtiene el estado en tiempo real de la batería (SoC, potencia, energía hoy)
+// Se refresca cada BATT_REFRESH_MS (15 min) para no saturar la API.
+async function fetchBatteryNow(){
+  if(Date.now()-battLastFetch < BATT_REFRESH_MS) return; // cooldown
+  battLastFetch=Date.now();
+  try{
+    const resp=await fetch('/api/solis-produccion?tipo=ahora',{cache:'no-store'});
+    const json=await resp.json();
+    if(json.ok && json.soc!=null){
+      BATT_SOC_NOW=json.soc;
+      BATT_POWER_NOW=json.power_w;
+      // Actualizamos también los kWh de batería de hoy en los stores diarios
+      const k=dayKey(TODAY);
+      if(json.cargaHoy_kwh>0) BATT_CHARGE[k]=json.cargaHoy_kwh;
+      if(json.descargaHoy_kwh>0) BATT_DISCHARGE[k]=json.descargaHoy_kwh;
+      render();
+    }
+  }catch(e){console.warn('Battery fetch failed',e);}
 }
 
 // Recupera el histórico de Solis: todos los meses desde la instalación (may 2026)
@@ -954,8 +1017,10 @@ function initData(){
   },2000);
   // Solis histórico: recupera meses anteriores que falten (desde la instalación)
   setTimeout(()=>{fetchSolisHistory();},3000);
+  // Batería en tiempo real: pide el estado actual del inversor
+  setTimeout(()=>{fetchBatteryNow();},4000);
   // Histórico Datadis: arranca en background con más retraso para no interferir con la carga inicial
-  setTimeout(()=>{fetchDatadisHistory();},4000);
+  setTimeout(()=>{fetchDatadisHistory();},5000);
 }
 
 const CONS_M=[1.15,1.10,1.00,0.90,0.85,0.95,1.05,1.05,0.90,0.90,1.05,1.20];
@@ -1141,6 +1206,45 @@ function renderInicio(){
     }
   }
   drawCompare('cInicio',D,{prod:false,cons:true,exp:false,imp:false});
+
+  // --- Tarjeta Batería (tiempo real, independiente del cursor) ---
+  const battCard=document.getElementById('iBattCard');
+  if(battCard){
+    if(BATT_SOC_NOW===null){battCard.style.display='none';}
+    else{
+      battCard.style.display='';
+      const soc=Math.round(BATT_SOC_NOW);
+      document.getElementById('iBattPct').textContent=soc;
+      // Barra de nivel
+      const fill=document.getElementById('iBattFill');
+      fill.style.width=soc+'%';
+      fill.className='batt-fill '+(soc>=60?'hi':soc>=30?'mid':'lo');
+      // Emoji según nivel
+      document.getElementById('iBattEmoji').textContent=soc>=20?'🔋':'🪫';
+      // Estado: cargando, descargando o en reposo
+      const pw=BATT_POWER_NOW||0;
+      const st=document.getElementById('iBattStatus');
+      if(pw<-50){
+        st.className='batt-status charging';
+        st.textContent='⚡ Cargando · '+(Math.abs(pw)/1000).toFixed(1)+' kW';
+      }else if(pw>50){
+        st.className='batt-status discharging';
+        st.textContent='↓ Descargando · '+(pw/1000).toFixed(1)+' kW';
+      }else{
+        st.className='batt-status idle';
+        st.textContent=soc>=99?'✓ Llena':'◉ En reposo';
+      }
+      // Detalle: kWh de hoy
+      const k=dayKey(TODAY);
+      const cHoy=BATT_CHARGE[k],dHoy=BATT_DISCHARGE[k];
+      const det=document.getElementById('iBattDetail');
+      if(det){
+        if(cHoy!=null||dHoy!=null){
+          det.textContent=`Hoy: +${f1(cHoy||0)} kWh cargados / −${f1(dHoy||0)} kWh descargados`;
+        }else{det.textContent='';}
+      }
+    }
+  }
 }
 function periodCost(){
   let energy=0,exp=0;const addDay=date=>{const g=genDay(date);for(let h=0;h<24;h++){const per=periodOf(h,date);energy+=g.imp[h]*tariff[per];exp+=g.exp[h];}};
@@ -1179,6 +1283,8 @@ function renderBalance(){
   const autosuf = consVal>0 ? Math.round(selfVal/consVal*100) : 0;
   // Aprovechamiento: % de lo producido que se usó en casa (autoconsumo / producción)
   const aprov = prodVal>0 ? Math.round(selfVal/prodVal*100) : 0;
+  // Batería: carga/descarga del periodo
+  const battCh=periodSolar(BATT_CHARGE), battDis=periodSolar(BATT_DISCHARGE);
 
   document.getElementById('rBalFrases').innerHTML=`
     <div class="bal-frase">
@@ -1190,7 +1296,14 @@ function renderBalance(){
       <div>Has aprovechado el <b>${aprov}%</b> de la energía que produjiste; el resto se vertió a la red.</div>
     </div>`;
 
-  // Diagrama de flujo: Sol → Casa, con Batería / Red entrada / Red salida
+  // Diagrama de flujo — se añade nodo de batería si hay datos
+  const battNode=battCh!=null?`
+      <div class="bal-node bat">
+        <div class="bn-ic">🔋</div>
+        <div class="bn-label">Batería</div>
+        <div class="bn-val" style="font-size:14px;color:var(--exp2)">+${f(battCh||0)}</div>
+        <div style="font-size:11px;color:var(--muted)">−${f(battDis||0)} kWh</div>
+      </div>`:'';
   document.getElementById('rBalFlow').innerHTML=`
     <div class="bal-node sun">
       <div class="bn-ic">☀️</div>
@@ -1205,6 +1318,7 @@ function renderBalance(){
     </div>
     <div class="bal-conn">↓</div>
     <div class="bal-row3">
+      ${battNode}
       <div class="bal-node grid-out">
         <div class="bn-ic">⚡</div>
         <div class="bn-label">Vertido a red</div>
