@@ -637,6 +637,9 @@ const SEED_REAL_CONS={};
 })();
 // REAL_CONS empieza con los datos semilla y se enriquece con cache + llamadas a Datadis.
 let REAL_CONS = Object.assign({}, SEED_REAL_CONS);
+// REAL_HOURLY: dayKey -> array de 24 kWh reales por hora (Datadis), solo cuando el día
+// está completo (horasValidas===24). Si no existe, genDay recurre a la estimación.
+let REAL_HOURLY = {};
 function dayKey(d){return d.getFullYear()+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0');}
 function realConsOf(d){const k=dayKey(d);return (k in REAL_CONS)?REAL_CONS[k]:null;}
 
@@ -788,12 +791,23 @@ let isFetching=false, lastManualTap=0;
 function loadCache(){
   try{
     const raw=localStorage.getItem(LS_DATA);
-    if(raw){const obj=JSON.parse(raw);if(obj && typeof obj==='object')Object.assign(REAL_CONS,obj);}
+    if(raw){
+      const obj=JSON.parse(raw);
+      if(obj && typeof obj==='object'){
+        if(obj.cons||obj.hourly){
+          if(obj.cons)Object.assign(REAL_CONS,obj.cons);
+          if(obj.hourly)Object.assign(REAL_HOURLY,obj.hourly);
+        }else{
+          // Formato antiguo: objeto plano dia->kwh (sin desglose horario)
+          Object.assign(REAL_CONS,obj);
+        }
+      }
+    }
   }catch(e){console.warn('Cache load failed',e);}
 }
 // Guarda los datos en el navegador para no perderlos al cerrar la app
 function saveCache(){
-  try{localStorage.setItem(LS_DATA,JSON.stringify(REAL_CONS));}catch(e){console.warn('Cache save failed',e);}
+  try{localStorage.setItem(LS_DATA,JSON.stringify({cons:REAL_CONS,hourly:REAL_HOURLY}));}catch(e){console.warn('Cache save failed',e);}
 }
 function getLastUpdate(){const t=parseInt(localStorage.getItem(LS_TIME)||'0',10);return isNaN(t)?0:t;}
 function setLastUpdate(t){try{localStorage.setItem(LS_TIME,String(t));}catch(e){}}
@@ -858,6 +872,11 @@ async function fetchDatadisMes(mesKey){
         if(item && item.dia && typeof item.kwh==='number'){
           if(REAL_CONS[item.dia]!==item.kwh)nuevos++;
           REAL_CONS[item.dia]=item.kwh;
+          // Solo usamos el desglose horario cuando Datadis ha publicado el día completo.
+          // Si falta alguna hora (días muy recientes), genDay recurre a la estimación.
+          if(Array.isArray(item.horas) && item.horasValidas===24 && item.horas.every(h=>typeof h==='number')){
+            REAL_HOURLY[item.dia]=item.horas;
+          }
         }
       }
     }
@@ -1037,8 +1056,9 @@ function genDay(d){
     shape.push(c);
   }
   // Si Datadis no tiene el día, usamos compra_kwh de Solis como proxy (misma magnitud: consumo de red)
+  const k=dayKey(d);
   let real=realConsOf(d);
-  if(real===null){const k=dayKey(d);if(k in SOLAR_IMP)real=SOLAR_IMP[k];}
+  if(real===null){if(k in SOLAR_IMP)real=SOLAR_IMP[k];}
   const cons=[],prod=[],exp=[],imp=[],self=[];
   // Datos solares reales del día (de Solis), si existen
   const prodDia=prodOf(d), expDia=expOf(d);
@@ -1046,9 +1066,18 @@ function genDay(d){
   let solShape=[],solSum=0;
   for(let h=0;h<24;h++){const s=(h>=6&&h<=21)?Math.exp(-Math.pow(h-13.5,2)/14):0;solShape.push(s);solSum+=s;}
   solSum=solSum||1;
-  if(real!==null){
-    const tot=shape.reduce((a,b)=>a+b,0)||1;const k=real/tot;
-    for(let h=0;h<24;h++){const c=shape[h]*k;cons.push(c);imp.push(c);self.push(0);
+  const hourly=REAL_HOURLY[k]; // 24 valores reales de Datadis si el día está completo
+  if(hourly){
+    // Datos horarios REALES: exactos, sin simulación
+    for(let h=0;h<24;h++){
+      const c=hourly[h];
+      cons.push(c);imp.push(c);self.push(0);
+      prod.push(prodDia!=null?prodDia*solShape[h]/solSum:0);
+      exp.push(expDia!=null?expDia*solShape[h]/solSum:0);
+    }
+  }else if(real!==null){
+    const tot=shape.reduce((a,b)=>a+b,0)||1;const kf=real/tot;
+    for(let h=0;h<24;h++){const c=shape[h]*kf;cons.push(c);imp.push(c);self.push(0);
       prod.push(prodDia!=null?prodDia*solShape[h]/solSum:0);
       exp.push(expDia!=null?expDia*solShape[h]/solSum:0);}
   }else{
@@ -1246,12 +1275,30 @@ function renderInicio(){
     }
   }
 }
+// Coste estimado completo: energía neta (con compensación excedentes) + potencia + contador + bono + IEE + IVA.
+// Para mes/año usa computeBill(); para día lo calcula a escala diaria con los mismos criterios.
 function periodCost(){
-  let energy=0,exp=0;const addDay=date=>{const g=genDay(date);for(let h=0;h<24;h++){const per=periodOf(h,date);energy+=g.imp[h]*tariff[per];exp+=g.exp[h];}};
-  if(state.mode==='day')addDay(state.cursor);
-  else if(state.mode==='month'){const y=state.cursor.getFullYear(),m=state.cursor.getMonth(),cur=(y===TODAY.getFullYear()&&m===TODAY.getMonth()),last=cur?TODAY.getDate():daysInMonth(y,m);for(let d=1;d<=last;d++)addDay(new Date(y,m,d));}
-  else{const y=state.cursor.getFullYear(),cur=(y===TODAY.getFullYear()),lastM=cur?TODAY.getMonth():11;for(let m=0;m<=lastM;m++){const lastD=(cur&&m===TODAY.getMonth())?TODAY.getDate():daysInMonth(y,m);for(let d=1;d<=lastD;d++)addDay(new Date(y,m,d));}}
-  let comp=exp*tariff.exc;if(comp>energy)comp=energy;return Math.max(0,energy-comp);
+  if(state.mode==='month'){
+    const y=state.cursor.getFullYear(),m=state.cursor.getMonth();
+    const cur=(y===TODAY.getFullYear()&&m===TODAY.getMonth());
+    return computeBill(y,m,cur?TODAY.getDate():daysInMonth(y,m)).total;
+  }
+  if(state.mode==='year'){
+    const y=state.cursor.getFullYear(),cur=(y===TODAY.getFullYear()),lastM=cur?TODAY.getMonth():11;
+    let tot=0;
+    for(let m=0;m<=lastM;m++){const ld=(cur&&m===TODAY.getMonth())?TODAY.getDate():daysInMonth(y,m);tot+=computeBill(y,m,ld).total;}
+    return tot;
+  }
+  const date=state.cursor,g=genDay(date),t=tariffFor(date),taxes=taxesFor(date.getFullYear(),date.getMonth());
+  let energy=0,exp=0,impTotal=0;
+  for(let h=0;h<24;h++){const per=periodOf(h,date);energy+=g.imp[h]*t[per];exp+=g.exp[h];impTotal+=g.imp[h];}
+  const comp=Math.min(exp*t.exc,energy);
+  const netEnergy=Math.max(0,energy-comp);
+  const power=t.kw1*t.pp1+t.kw2*t.pp2;
+  const ieeMin=taxes.ieeMin||0.001;
+  const iee=Math.max((taxes.iee/100)*(netEnergy+power),ieeMin*impTotal);
+  const base=netEnergy+power+t.cont+t.bono+iee;
+  return Math.max(0,base+(taxes.iva/100)*base);
 }
 function renderInformes(){
   periodLabels('r');const D=periodData();
@@ -1357,11 +1404,9 @@ function renderFranjas(){
       else v+=g.imp[h];
     }
     const tot=p+ll+v;
-    // Marcamos como estimación si no tenemos datos horarios reales de Datadis
-    // (solo tenemos total diario de semilla). Heurística: si el valor viene
-    // de la semilla, todos los días del mes tienen exactamente el mismo valor.
-    // Si hay variación entre días, son datos reales horarios de Datadis.
-    const esEst=true; // siempre estimado hasta integrar horarios reales de Datadis
+    // Estimado solo si Datadis aún no ha publicado el desglose horario completo de este día
+    // (normalmente los últimos 1-2 días). El resto son datos horarios reales.
+    const esEst=!REAL_HOURLY[dayKey(date)];
     if(esEst)hayEst=true;
 
     totP+=p;totLl+=ll;totV+=v;
@@ -1417,10 +1462,11 @@ function renderFranjas(){
       <td style="font-size:12px">${f1d(totTotal/nRows)}</td>
     </tr>`;
 
-  // Nota de estimación
-  document.getElementById('rFranjaNote').textContent=hayEst
-    ?'* El desglose por franja es una estimación basada en el perfil horario típico de consumo doméstico. Cuando SolarNest integre los datos horarios reales de Datadis, el desglose será exacto.'
-    :'';
+  // Nota: aclara qué días son estimación y cuáles son datos horarios reales de Datadis
+  document.getElementById('rFranjaNote').textContent = rows.length===0 ? ''
+    : hayEst
+      ? '* Los días en cursiva son una estimación: Datadis aún no ha publicado su desglose horario (suele tardar 1-2 días). El resto son tus datos horarios reales.'
+      : '* Desglose calculado con tus datos horarios reales de Datadis.';
 }
 function renderFactura(){
   const y=state.billYear, m=state.billMonth;
