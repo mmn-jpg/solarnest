@@ -68,7 +68,8 @@ async function redisSet(key, value) {
 
 // Construye el objeto de respuesta a partir de los datos crudos de Datadis
 function resumirDatos(datos, mes) {
-  const porDia = {};
+  const porDia = {};      // dia -> total kWh (como hasta ahora)
+  const horasPorDia = {}; // dia -> array(24) de kWh por hora, o null si Datadis no la ha publicado
   let totalMes = 0;
   for (const r of datos) {
     const kwh = Number(r.consumptionKWh) || 0;
@@ -76,8 +77,28 @@ function resumirDatos(datos, mes) {
     const dia = r.date; // AAAA/MM/DD
     if (!porDia[dia]) porDia[dia] = 0;
     porDia[dia] += kwh;
+
+    // Datadis usa convención "hora que termina el periodo": 01:00..24:00
+    // El consumo etiquetado "01:00" corresponde a las 00:00-01:00 -> índice 0.
+    if (!horasPorDia[dia]) horasPorDia[dia] = Array(24).fill(null);
+    const h = parseInt(String(r.time || '').slice(0, 2), 10);
+    if (!isNaN(h)) {
+      let idx = null;
+      if (h >= 1 && h <= 24) idx = (h - 1) % 24;       // convención 1-24 (la habitual en Datadis)
+      else if (h >= 0 && h <= 23) idx = h;             // por si llega 0-23
+      if (idx !== null) horasPorDia[dia][idx] = (horasPorDia[dia][idx] || 0) + kwh;
+    }
   }
-  const dias = Object.keys(porDia).sort().map(d => ({ dia: d, kwh: Number(porDia[d].toFixed(3)) }));
+  const dias = Object.keys(porDia).sort().map(d => {
+    const horas = horasPorDia[d] || Array(24).fill(null);
+    const horasValidas = horas.filter(v => v !== null).length;
+    return {
+      dia: d,
+      kwh: Number(porDia[d].toFixed(3)),
+      horas: horas.map(v => v === null ? null : Number(v.toFixed(3))),
+      horasValidas
+    };
+  });
   return {
     ok: true,
     mesConsultado: mes,
