@@ -111,7 +111,7 @@
   .meter .r{display:flex;justify-content:space-between;font-size:13.5px;margin-bottom:7px}
   .meter .r .p{font-weight:700}
   .track{height:9px;background:rgba(255,255,255,.1);border-radius:999px;overflow:hidden}
-  .fill{height:100%;border-radius:999px;width:0;transition:width .9s cubic-bezier(.2,.7,.2,1)}
+  .fill{height:100%;border-radius:999px;width:0;background:linear-gradient(90deg,var(--prod1),var(--prod2));transition:width .9s cubic-bezier(.2,.7,.2,1)}
 
   .bill .total{text-align:center;padding:8px 0 4px}
   .bill .total .k{font-size:13px;color:var(--muted);font-weight:600}
@@ -1301,7 +1301,7 @@ function renderBalance(){
       <div class="bal-node bat">
         <div class="bn-ic">🔋</div>
         <div class="bn-label">Batería</div>
-        <div class="bn-val" style="font-size:14px;color:var(--exp2)">+${f(battCh||0)}</div>
+        <div class="bn-val" style="font-size:14px;color:var(--exp2)">+${f(battCh||0)} kWh</div>
         <div style="font-size:11px;color:var(--muted)">−${f(battDis||0)} kWh</div>
       </div>`:'';
   document.getElementById('rBalFlow').innerHTML=`
