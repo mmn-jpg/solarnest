@@ -216,6 +216,7 @@
   .bal-frase b{font-weight:800}
   .bal-frase .bf-sun{background:rgba(255,159,10,.18)}
   .bal-frase .bf-self{background:rgba(52,209,88,.18)}
+  .bal-frase .bf-money{background:rgba(52,199,89,.18)}
 
   .bal-flow{display:flex;flex-direction:column;align-items:center;gap:0;margin:6px 0 4px}
   .bal-node{display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 18px;
@@ -1159,6 +1160,65 @@ function computeBill(y,m,lastDay){
   return{eByP,energyGross,energy,power,bono,contador,comp,iee,iva,total:base+iva,kwhExp:expTotal,taxes,tm};
 }
 
+// Array de fechas del periodo actualmente seleccionado (mismo criterio que periodSolar)
+function datesForPeriod(){
+  const d=state.cursor;
+  if(state.mode==='day')return[d];
+  if(state.mode==='month'){
+    const y=d.getFullYear(),m=d.getMonth(),cur=(y===TODAY.getFullYear()&&m===TODAY.getMonth());
+    const last=cur?TODAY.getDate():daysInMonth(y,m),arr=[];
+    for(let i=1;i<=last;i++)arr.push(new Date(y,m,i));
+    return arr;
+  }
+  const y=d.getFullYear(),cur=(y===TODAY.getFullYear()),lastM=cur?TODAY.getMonth():11,arr=[];
+  for(let mi=0;mi<=lastM;mi++){const lastD=(cur&&mi===TODAY.getMonth())?TODAY.getDate():daysInMonth(y,mi);
+    for(let di=1;di<=lastD;di++)arr.push(new Date(y,mi,di));}
+  return arr;
+}
+
+// Aplica compensación de excedentes + IEE + IVA a un bloque de energía/potencia/fijos.
+// Función compartida por el coste real y el coste hipotético del ahorro.
+function billFromComponents(energyGross,expTotal,impTotal,power,cont,bono,taxes,exc){
+  let comp=expTotal*exc;if(comp>energyGross)comp=energyGross;
+  const energy=energyGross-comp;
+  const ieeMin=taxes.ieeMin||0.001;
+  const iee=Math.max((taxes.iee/100)*(energy+power),ieeMin*impTotal);
+  const base=energy+power+cont+bono+iee;
+  return base*(1+taxes.iva/100);
+}
+
+// Ahorro económico estimado: compara el coste real (con instalación, con
+// compensación de excedentes) frente al coste hipotético si TODO el consumo
+// de la casa (SOLAR_CONS, de Solis) viniera de la red sin paneles ni batería.
+// El precio hipotético de la energía es el precio medio ponderado que ya
+// pagas por tu consumo de red real (mismas franjas), aplicado al consumo total.
+// Solo se consideran días con dato de Solis (desde el 19/05/2026); si el
+// periodo seleccionado no tiene ninguno, devuelve null (sin instalación aún).
+function computeSavings(){
+  const porMes={};
+  for(const date of datesForPeriod()){
+    const k=dayKey(date), consHipDia=SOLAR_CONS[k];
+    if(consHipDia==null)continue;
+    const ym=date.getFullYear()+'-'+date.getMonth();
+    if(!porMes[ym])porMes[ym]={eByP:{P:0,Ll:0,V:0},expTotal:0,impTotal:0,power:0,cont:0,bono:0,exc:0,consHip:0,
+                                 taxes:taxesFor(date.getFullYear(),date.getMonth())};
+    const c=porMes[ym],g=genDay(date),t=tariffFor(date);
+    for(let h=0;h<24;h++){const per=periodOf(h,date);c.eByP[per]+=g.imp[h]*t[per];c.expTotal+=g.exp[h];c.impTotal+=g.imp[h];}
+    c.power+=t.kw1*t.pp1+t.kw2*t.pp2;c.cont+=t.cont;c.bono+=t.bono;c.exc=t.exc;
+    c.consHip+=consHipDia;
+  }
+  const meses=Object.keys(porMes);
+  if(meses.length===0)return null;
+  let real=0,hip=0;
+  for(const ym of meses){
+    const c=porMes[ym],energyGross=c.eByP.P+c.eByP.Ll+c.eByP.V;
+    real+=billFromComponents(energyGross,c.expTotal,c.impTotal,c.power,c.cont,c.bono,c.taxes,c.exc);
+    const precioMedio=c.impTotal>0?energyGross/c.impTotal:0;
+    hip+=billFromComponents(c.consHip*precioMedio,0,c.consHip,c.power,c.cont,c.bono,c.taxes,c.exc);
+  }
+  return{real,hip,ahorro:hip-real};
+}
+
 const f1=n=>n.toLocaleString('es-ES',{minimumFractionDigits:1,maximumFractionDigits:1});
 const f0=n=>Math.round(n).toLocaleString('es-ES');
 const e2=n=>n.toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -1333,6 +1393,14 @@ function renderBalance(){
   // Batería: carga/descarga del periodo
   const battCh=periodSolar(BATT_CHARGE), battDis=periodSolar(BATT_DISCHARGE);
 
+  // Ahorro económico: solo si el periodo tiene días con dato de Solis
+  const sav=computeSavings();
+  const savFrase=sav?`
+    <div class="bal-frase">
+      <span class="bf-ic bf-money">💰</span>
+      <div>Sin tu instalación habrías pagado aproximadamente <b>€${e2(sav.hip)}</b>; con ella, <b>€${e2(sav.real)}</b> — un ahorro de <b>€${e2(sav.ahorro)}</b>${sav.hip>0?` (${Math.round(sav.ahorro/sav.hip*100)}%)`:''}.</div>
+    </div>`:'';
+
   document.getElementById('rBalFrases').innerHTML=`
     <div class="bal-frase">
       <span class="bf-ic bf-sun">☀️</span>
@@ -1341,7 +1409,7 @@ function renderBalance(){
     <div class="bal-frase">
       <span class="bf-ic bf-self">🔋</span>
       <div>Has aprovechado el <b>${aprov}%</b> de la energía que produjiste; el resto se vertió a la red.</div>
-    </div>`;
+    </div>${savFrase}`;
 
   // Diagrama de flujo — se añade nodo de batería si hay datos
   const battNode=battCh!=null?`
