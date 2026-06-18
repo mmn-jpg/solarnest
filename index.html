@@ -1020,11 +1020,13 @@ function hardReset(){
     localStorage.removeItem(LS_TRY);
   }catch(e){}
   REAL_CONS=Object.assign({},SEED_REAL_CONS);
+  REAL_HOURLY={};
   lastManualTap=0;
   const el=document.getElementById('syncBadge');
   if(el){el.textContent='Datadis · reiniciando…';}
   render();
   setTimeout(()=>fetchDatadisCurrentMonth(),500);
+  setTimeout(()=>fetchDatadisHistory(),2000);
 }
 let _badgeTimer=null;
 function badgePressStart(){_badgeTimer=setTimeout(()=>{_badgeTimer=null;hardReset();},3000);}
