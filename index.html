@@ -948,7 +948,9 @@ async function fetchDatadisHistory(){
   for(let i=0;i<14;i++){
     if(y<2025||(y===2025&&m<5))break; // no hay datos antes de may 2025 (límite razonable)
     const prefix=y+'/'+String(m+1).padStart(2,'0')+'/';
-    const diasConDatos=Object.keys(REAL_CONS).filter(k=>k.startsWith(prefix)).length;
+    // Usamos REAL_HOURLY (no REAL_CONS) como criterio: la semilla rellena REAL_CONS
+    // pero nunca REAL_HOURLY. Si un mes no tiene datos horarios reales, lo pedimos.
+    const diasConDatos=Object.keys(REAL_HOURLY).filter(k=>k.startsWith(prefix)).length;
     const diasMes=new Date(y,m+1,0).getDate();
     if(diasConDatos < diasMes-3){ // mes incompleto
       const mesKey=y+'/'+String(m+1).padStart(2,'0');
