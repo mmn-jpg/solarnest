@@ -1081,10 +1081,16 @@ function genDay(d){
       exp.push(expDia!=null?expDia*solShape[h]/solSum:0);
     }
   }else if(real!==null){
+    // Si es hoy y no hay datos horarios reales, las horas futuras son 0 (aún no han ocurrido)
+    const esHoy=(d.getFullYear()===TODAY.getFullYear()&&d.getMonth()===TODAY.getMonth()&&d.getDate()===TODAY.getDate());
+    const horaActual=esHoy?new Date().getHours():24;
     const tot=shape.reduce((a,b)=>a+b,0)||1;const kf=real/tot;
-    for(let h=0;h<24;h++){const c=shape[h]*kf;cons.push(c);imp.push(c);self.push(0);
-      prod.push(prodDia!=null?prodDia*solShape[h]/solSum:0);
-      exp.push(expDia!=null?expDia*solShape[h]/solSum:0);}
+    for(let h=0;h<24;h++){
+      const c=h<horaActual?shape[h]*kf:0;
+      cons.push(c);imp.push(c);self.push(0);
+      prod.push(prodDia!=null&&h<horaActual?prodDia*solShape[h]/solSum:0);
+      exp.push(expDia!=null&&h<horaActual?expDia*solShape[h]/solSum:0);
+    }
   }else{
     for(let h=0;h<24;h++){cons.push(0);self.push(0);imp.push(0);
       prod.push(prodDia!=null?prodDia*solShape[h]/solSum:0);
